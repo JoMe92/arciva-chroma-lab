@@ -15,6 +15,9 @@ export default defineConfig({
       topLevelAwait()
     ]
   },
+  optimizeDeps: {
+    exclude: ['quickfix-renderer']
+  },
   server: {
     fs: {
       allow: ['../..']

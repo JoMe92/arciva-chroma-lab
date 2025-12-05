@@ -25,6 +25,7 @@ function App() {
     const img = new Image();
     img.src = '/sample.jpg'; // Ensure this exists or use a placeholder
     img.onload = () => {
+      console.log("Image loaded:", img.width, img.height);
       setImage(img);
 
       // Get raw bytes
@@ -35,9 +36,17 @@ function App() {
       if (ctx) {
         ctx.drawImage(img, 0, 0);
         const data = ctx.getImageData(0, 0, img.width, img.height).data;
+        console.log("Image data extracted, length:", data.length);
         setImageData(new Uint8Array(data.buffer));
+
+        // Set initial canvas size
+        if (canvasRef.current) {
+          canvasRef.current.width = img.width;
+          canvasRef.current.height = img.height;
+        }
       }
     };
+    img.onerror = (e) => console.error("Failed to load image:", e);
   }, []);
 
   // Initialize Renderer
