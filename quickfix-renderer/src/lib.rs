@@ -50,15 +50,36 @@ impl QuickFixAdjustments {
 }
 
 #[wasm_bindgen]
+pub struct FrameResult {
+    data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[wasm_bindgen]
+impl FrameResult {
+    #[wasm_bindgen(getter)]
+    pub fn data(&self) -> Vec<u8> {
+        self.data.clone()
+    }
+}
+
+#[wasm_bindgen]
 pub fn process_frame(
     data: &mut [u8],
     width: u32,
     height: u32,
     adjustments: JsValue,
-) -> Result<Vec<u8>, JsValue> {
+) -> Result<FrameResult, JsValue> {
     let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
-    operations::process_frame_internal(data, width, height, &adjustments)
-        .map_err(|e| JsValue::from_str(&e))
+    let (data, w, h) = operations::process_frame_internal(data, width, height, &adjustments)
+        .map_err(|e| JsValue::from_str(&e))?;
+    
+    Ok(FrameResult {
+        data,
+        width: w,
+        height: h,
+    })
 }
 
 pub mod operations;
@@ -98,7 +119,7 @@ mod tests {
         let res1 = operations::process_frame_internal(&mut data1, width, height, &adj).unwrap();
         let res2 = operations::process_frame_internal(&mut data2, width, height, &adj).unwrap();
 
-        assert_eq!(res1, res2, "Grain output should be identical for same seed");
+        assert_eq!(res1.0, res2.0, "Grain output should be identical for same seed");
     }
 
     #[test]

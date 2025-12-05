@@ -22,7 +22,7 @@ pub fn process_frame_internal(
     width: u32,
     height: u32,
     adjustments: &QuickFixAdjustments,
-) -> Result<Vec<u8>, String> {
+) -> Result<(Vec<u8>, u32, u32), String> {
     // Convert raw bytes to ImageBuffer
     let mut img: RgbaImage =
         ImageBuffer::from_raw(width, height, data.to_vec()).ok_or("Invalid buffer size")?;
@@ -52,7 +52,8 @@ pub fn process_frame_internal(
         apply_grain_in_place(&mut img, grain);
     }
 
-    Ok(img.into_raw())
+    let (w, h) = img.dimensions();
+    Ok((img.into_raw(), w, h))
 }
 
 // Bicubic interpolation helper
