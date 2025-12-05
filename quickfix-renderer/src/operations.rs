@@ -400,3 +400,71 @@ fn apply_grain_in_place(img: &mut RgbaImage, settings: &GrainSettings) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ColorSettings, CropSettings, ExposureSettings, GeometrySettings, GrainSettings};
+
+    fn create_test_image(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {
+        let mut img = RgbaImage::new(width, height);
+        for pixel in img.pixels_mut() {
+            *pixel = Rgba(color);
+        }
+        img
+    }
+
+    #[test]
+    fn test_apply_exposure() {
+        let mut img = create_test_image(10, 10, [100, 100, 100, 255]);
+        let settings = ExposureSettings {
+            exposure: Some(1.0), // +1 stop = double values
+            ..Default::default()
+        };
+        apply_exposure_in_place(&mut img, &settings);
+        
+        let px = img.get_pixel(0, 0);
+        // 100/255 * 2 = 200/255 approx. 
+        // 100 * 2 = 200.
+        assert!(px[0] >= 199 && px[0] <= 201);
+    }
+
+    #[test]
+    fn test_apply_color_temperature() {
+        let mut img = create_test_image(10, 10, [128, 128, 128, 255]);
+        let settings = ColorSettings {
+            temperature: Some(0.5), // Warmer: more red, less blue
+            ..Default::default()
+        };
+        apply_color_balance_in_place(&mut img, &settings);
+        
+        let px = img.get_pixel(0, 0);
+        assert!(px[0] > 128); // Red increased
+        assert!(px[2] < 128); // Blue decreased
+    }
+
+    #[test]
+    fn test_apply_crop() {
+        let img = create_test_image(100, 100, [255, 0, 0, 255]);
+        let settings = CropSettings {
+            aspect_ratio: Some(2.0), // 2:1 ratio
+            ..Default::default()
+        };
+        let res = apply_crop_rotate(&img, &settings);
+        
+        assert_eq!(res.width(), 100);
+        assert_eq!(res.height(), 50); // Should be cropped to height 50
+    }
+
+    #[test]
+    fn test_apply_geometry_no_panic() {
+        let img = create_test_image(50, 50, [0, 255, 0, 255]);
+        let settings = GeometrySettings {
+            vertical: Some(0.5),
+            horizontal: Some(-0.2),
+        };
+        let res = apply_geometry(&img, &settings);
+        assert_eq!(res.width(), 50);
+        assert_eq!(res.height(), 50);
+    }
+}
