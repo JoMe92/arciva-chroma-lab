@@ -8,7 +8,6 @@ import path from 'path';
 export default defineConfig({
   resolve: {
     alias: {
-      'quickfix-renderer': path.resolve(__dirname, '../../quickfix-renderer/pkg/quickfix_renderer.js'),
     },
   },
   plugins: [
@@ -23,8 +22,7 @@ export default defineConfig({
   },
   worker: {
     plugins: () => [
-      wasm(),
-      topLevelAwait()
+      wasm()
     ]
   },
   optimizeDeps: {

@@ -2,6 +2,9 @@
 name = "quickfix-renderer"
 version = "0.2.0"
 edition = "2021"
+authors = ["Antigravity <antigravity@google.com>"]
+description = "Rust/WASM Quick Fix Renderer"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
