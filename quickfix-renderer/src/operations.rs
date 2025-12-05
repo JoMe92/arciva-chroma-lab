@@ -3,7 +3,7 @@ use crate::{
     QuickFixAdjustments,
 };
 use image::{ImageBuffer, Pixel, Rgba, RgbaImage};
-use rand::{Rng, SeedableRng};
+use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Normal};
 use std::cmp::{max, min};
