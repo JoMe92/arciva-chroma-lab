@@ -1,0 +1,17 @@
+{
+  "name": "quickfix-renderer-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "pnpm run build:wasm && pnpm run build:bundle",
+    "build:wasm": "wasm-pack build --target web --out-dir pkg quickfix-renderer",
+    "build:bundle": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0",
+    "wasm-pack": "^0.12.1",
+    "typescript": "^5.0.0"
+  }
+}
