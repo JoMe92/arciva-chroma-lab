@@ -1,5 +1,19 @@
+use crate::renderer::{Renderer, RendererError};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
+
+pub mod operations;
+pub mod renderer;
+pub mod shaders;
+#[cfg(target_arch = "wasm32")]
+pub mod webgl;
+#[cfg(target_arch = "wasm32")]
+pub mod webgpu;
+
+#[wasm_bindgen]
+pub fn init_panic_hook() {
+    console_error_panic_hook::set_once();
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CropSettings {
@@ -50,18 +64,198 @@ impl QuickFixAdjustments {
 }
 
 #[wasm_bindgen]
+pub struct FrameResult {
+    data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[wasm_bindgen]
+impl FrameResult {
+    #[wasm_bindgen(getter)]
+    pub fn data(&self) -> Vec<u8> {
+        self.data.clone()
+    }
+}
+
+// Legacy CPU synchronous entry point
+#[wasm_bindgen]
 pub fn process_frame(
     data: &mut [u8],
     width: u32,
     height: u32,
     adjustments: JsValue,
-) -> Result<Vec<u8>, JsValue> {
+) -> Result<FrameResult, JsValue> {
     let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
-    operations::process_frame_internal(data, width, height, &adjustments)
-        .map_err(|e| JsValue::from_str(&e))
+    let (data, w, h) = operations::process_frame_internal(data, width, height, &adjustments)
+        .map_err(|e| JsValue::from_str(&e))?;
+
+    Ok(FrameResult {
+        data,
+        width: w,
+        height: h,
+    })
 }
 
-pub mod operations;
+// CPU Renderer wrapper to fit Renderer trait
+struct CpuRenderer;
+#[async_trait::async_trait(?Send)]
+impl Renderer for CpuRenderer {
+    async fn init(&mut self) -> Result<(), RendererError> {
+        Ok(())
+    }
+    async fn render(
+        &mut self,
+        data: &[u8],
+        width: u32,
+        height: u32,
+        settings: &QuickFixAdjustments,
+    ) -> Result<Vec<u8>, RendererError> {
+        // We need to copy data because process_frame_internal takes &mut [u8]
+        let mut data_vec = data.to_vec();
+        let (res, _, _) =
+            operations::process_frame_internal(&mut data_vec, width, height, settings)
+                .map_err(RendererError::RenderFailed)?;
+        Ok(res)
+    }
+    async fn render_to_canvas(
+        &mut self,
+        data: &[u8],
+        width: u32,
+        height: u32,
+        settings: &QuickFixAdjustments,
+        canvas: &web_sys::HtmlCanvasElement,
+    ) -> Result<(), RendererError> {
+        let mut data_vec = data.to_vec();
+        let (res, w, h) =
+            operations::process_frame_internal(&mut data_vec, width, height, settings)
+                .map_err(RendererError::RenderFailed)?;
+
+        if canvas.width() != w || canvas.height() != h {
+            canvas.set_width(w);
+            canvas.set_height(h);
+        }
+
+        // Draw to canvas using 2D context
+        let ctx = canvas
+            .get_context("2d")
+            .map_err(|_| RendererError::RenderFailed("Failed to get 2d context".into()))?
+            .ok_or(RendererError::RenderFailed(
+                "Failed to get 2d context".into(),
+            ))?
+            .dyn_into::<web_sys::CanvasRenderingContext2d>()
+            .map_err(|_| RendererError::RenderFailed("Failed to cast to 2d context".into()))?;
+
+        let clamped = wasm_bindgen::Clamped(&res[..]);
+        let image_data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(clamped, w, h)
+            .map_err(|e| RendererError::RenderFailed(format!("{:?}", e)))?;
+
+        ctx.put_image_data(&image_data, 0.0, 0.0)
+            .map_err(|e| RendererError::RenderFailed(format!("{:?}", e)))?;
+
+        Ok(())
+    }
+}
+
+#[wasm_bindgen]
+pub struct QuickFixRenderer {
+    renderer: Box<dyn Renderer>,
+    backend_name: String,
+}
+
+#[wasm_bindgen]
+impl QuickFixRenderer {
+    pub async fn create(force_backend: Option<String>) -> Result<QuickFixRenderer, JsValue> {
+        let force = force_backend.as_deref();
+
+        // 1. Try WebGPU (WASM only)
+        #[cfg(target_arch = "wasm32")]
+        if force.is_none() || force == Some("webgpu") {
+            let mut renderer = webgpu::WebGpuRenderer::new();
+            if renderer.init().await.is_ok() {
+                return Ok(QuickFixRenderer {
+                    renderer: Box::new(renderer),
+                    backend_name: "webgpu".to_string(),
+                });
+            } else if force == Some("webgpu") {
+                return Err(JsValue::from_str("WebGPU forced but failed to initialize"));
+            }
+        }
+
+        // 2. Try WebGL2 (WASM only)
+        #[cfg(target_arch = "wasm32")]
+        if force.is_none() || force == Some("webgl2") {
+            let mut renderer = webgl::WebGlRenderer::new();
+            if renderer.init().await.is_ok() {
+                return Ok(QuickFixRenderer {
+                    renderer: Box::new(renderer),
+                    backend_name: "webgl2".to_string(),
+                });
+            } else if force == Some("webgl2") {
+                return Err(JsValue::from_str("WebGL2 forced but failed to initialize"));
+            }
+        }
+
+        // 3. Fallback to CPU
+        if force.is_none() || force == Some("cpu") {
+            return Ok(QuickFixRenderer {
+                renderer: Box::new(CpuRenderer),
+                backend_name: "cpu".to_string(),
+            });
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if force == Some("webgpu") || force == Some("webgl2") {
+            return Err(JsValue::from_str(
+                "WebGPU/WebGL2 not supported on this platform",
+            ));
+        }
+
+        Err(JsValue::from_str("No suitable backend found"))
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn backend(&self) -> String {
+        self.backend_name.clone()
+    }
+
+    pub async fn render(
+        &mut self,
+        data: &[u8],
+        width: u32,
+        height: u32,
+        adjustments: JsValue,
+    ) -> Result<FrameResult, JsValue> {
+        let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
+        let result = self
+            .renderer
+            .render(data, width, height, &adjustments)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        Ok(FrameResult {
+            data: result,
+            width,
+            height,
+        })
+    }
+
+    pub async fn render_to_canvas(
+        &mut self,
+        data: &[u8],
+        width: u32,
+        height: u32,
+        adjustments: JsValue,
+        canvas: web_sys::HtmlCanvasElement,
+    ) -> Result<(), JsValue> {
+        let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
+        self.renderer
+            .render_to_canvas(data, width, height, &adjustments, &canvas)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -98,7 +292,10 @@ mod tests {
         let res1 = operations::process_frame_internal(&mut data1, width, height, &adj).unwrap();
         let res2 = operations::process_frame_internal(&mut data2, width, height, &adj).unwrap();
 
-        assert_eq!(res1, res2, "Grain output should be identical for same seed");
+        assert_eq!(
+            res1.0, res2.0,
+            "Grain output should be identical for same seed"
+        );
     }
 
     #[test]

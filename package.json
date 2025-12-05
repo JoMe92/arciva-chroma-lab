@@ -3,11 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "pnpm -C examples/minimal-viewer dev",
     "build": "pnpm run build:wasm && pnpm run build:bundle",
     "build:wasm": "wasm-pack build --target web --out-dir pkg quickfix-renderer",
-    "build:bundle": "vite build",
-    "preview": "vite preview"
+    "build:bundle": "pnpm -C examples/minimal-viewer build",
+    "preview": "pnpm -C examples/minimal-viewer preview"
   },
   "devDependencies": {
     "vite": "^5.0.0",
