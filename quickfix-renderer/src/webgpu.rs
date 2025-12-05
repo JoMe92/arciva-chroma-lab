@@ -1,8 +1,12 @@
-use crate::{renderer::{Renderer, RendererError}, QuickFixAdjustments, shaders::WGSL_SHADER};
+use crate::{
+    renderer::{Renderer, RendererError},
+    shaders::WGSL_SHADER,
+    QuickFixAdjustments,
+};
 use async_trait::async_trait;
-use wgpu::util::DeviceExt;
-use std::borrow::Cow;
 use bytemuck::{Pod, Zeroable};
+use std::borrow::Cow;
+use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -35,6 +39,12 @@ pub struct WebGpuRenderer {
     grain_sampler: Option<wgpu::Sampler>,
 }
 
+impl Default for WebGpuRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WebGpuRenderer {
     pub fn new() -> Self {
         Self {
@@ -54,20 +64,27 @@ impl WebGpuRenderer {
             return Ok(());
         }
 
-        let adapter = self.instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        }).await.ok_or(RendererError::WebGpuNotSupported)?;
+        let adapter = self
+            .instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .ok_or(RendererError::WebGpuNotSupported)?;
 
-        let (device, queue) = adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("QuickFix Device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
-            },
-            None,
-        ).await.map_err(|e| RendererError::InitFailed(e.to_string()))?;
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("QuickFix Device"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                },
+                None,
+            )
+            .await
+            .map_err(|e| RendererError::InitFailed(e.to_string()))?;
 
         // Create Bind Group Layout
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -163,16 +180,16 @@ impl WebGpuRenderer {
         // 256x256 noise texture
         let grain_size = 256;
         let mut rng = rand::thread_rng(); // Or seeded if we want deterministic across sessions, but implementation plan said "pre-generated".
-        // Actually, we should use the same seed logic as CPU if we want exact parity, but for grain texture we just need a good noise source.
-        // The implementation plan said "Grain noise will be pre-generated on the CPU ... and uploaded".
-        // Let's generate it here.
+                                          // Actually, we should use the same seed logic as CPU if we want exact parity, but for grain texture we just need a good noise source.
+                                          // The implementation plan said "Grain noise will be pre-generated on the CPU ... and uploaded".
+                                          // Let's generate it here.
         use rand_distr::{Distribution, Normal};
         let normal = Normal::new(0.5, 0.15).unwrap(); // Mean 0.5, sigma 0.15 (so +/- 3 sigma fits in 0..1 roughly)
-        // Wait, shader expects (val - 0.5) * 2.0 to get -1..1.
-        // So we want 0.5 + N(0, 1) * scale?
-        // Let's just generate uniform random for now? No, grain looks better with Gaussian.
-        // Let's generate Gaussian centered at 0.5.
-        
+                                                      // Wait, shader expects (val - 0.5) * 2.0 to get -1..1.
+                                                      // So we want 0.5 + N(0, 1) * scale?
+                                                      // Let's just generate uniform random for now? No, grain looks better with Gaussian.
+                                                      // Let's generate Gaussian centered at 0.5.
+
         let mut grain_data = Vec::with_capacity(grain_size * grain_size * 4);
         for _ in 0..(grain_size * grain_size) {
             let v: f32 = normal.sample(&mut rng);
@@ -290,15 +307,52 @@ impl Renderer for WebGpuRenderer {
 
         // Uniforms
         let uniforms = SettingsUniform {
-            geo_vertical: settings.geometry.as_ref().and_then(|g| g.vertical).unwrap_or(0.0),
-            geo_horizontal: settings.geometry.as_ref().and_then(|g| g.horizontal).unwrap_or(0.0),
-            crop_rotation: settings.crop.as_ref().and_then(|c| c.rotation).unwrap_or(0.0).to_radians(),
-            crop_aspect: settings.crop.as_ref().and_then(|c| c.aspect_ratio).unwrap_or(0.0),
-            exposure: settings.exposure.as_ref().and_then(|e| e.exposure).unwrap_or(0.0),
-            contrast: settings.exposure.as_ref().and_then(|e| e.contrast).unwrap_or(1.0),
-            highlights: settings.exposure.as_ref().and_then(|e| e.highlights).unwrap_or(0.0),
-            shadows: settings.exposure.as_ref().and_then(|e| e.shadows).unwrap_or(0.0),
-            temp: settings.color.as_ref().and_then(|c| c.temperature).unwrap_or(0.0),
+            geo_vertical: settings
+                .geometry
+                .as_ref()
+                .and_then(|g| g.vertical)
+                .unwrap_or(0.0),
+            geo_horizontal: settings
+                .geometry
+                .as_ref()
+                .and_then(|g| g.horizontal)
+                .unwrap_or(0.0),
+            crop_rotation: settings
+                .crop
+                .as_ref()
+                .and_then(|c| c.rotation)
+                .unwrap_or(0.0)
+                .to_radians(),
+            crop_aspect: settings
+                .crop
+                .as_ref()
+                .and_then(|c| c.aspect_ratio)
+                .unwrap_or(0.0),
+            exposure: settings
+                .exposure
+                .as_ref()
+                .and_then(|e| e.exposure)
+                .unwrap_or(0.0),
+            contrast: settings
+                .exposure
+                .as_ref()
+                .and_then(|e| e.contrast)
+                .unwrap_or(1.0),
+            highlights: settings
+                .exposure
+                .as_ref()
+                .and_then(|e| e.highlights)
+                .unwrap_or(0.0),
+            shadows: settings
+                .exposure
+                .as_ref()
+                .and_then(|e| e.shadows)
+                .unwrap_or(0.0),
+            temp: settings
+                .color
+                .as_ref()
+                .and_then(|c| c.temperature)
+                .unwrap_or(0.0),
             tint: settings.color.as_ref().and_then(|c| c.tint).unwrap_or(0.0),
             grain_amount: settings.grain.as_ref().map(|g| g.amount).unwrap_or(0.0),
             grain_size: match settings.grain.as_ref().map(|g| g.size.as_str()) {
@@ -336,7 +390,13 @@ impl Renderer for WebGpuRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&self.grain_texture.as_ref().unwrap().create_view(&Default::default())),
+                    resource: wgpu::BindingResource::TextureView(
+                        &self
+                            .grain_texture
+                            .as_ref()
+                            .unwrap()
+                            .create_view(&Default::default()),
+                    ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
@@ -412,7 +472,9 @@ impl Renderer for WebGpuRenderer {
             tx.send(result).unwrap();
         });
         device.poll(wgpu::Maintain::Wait);
-        rx.await.unwrap().map_err(|e| RendererError::RenderFailed(e.to_string()))?;
+        rx.await
+            .unwrap()
+            .map_err(|e| RendererError::RenderFailed(e.to_string()))?;
 
         let data = buffer_slice.get_mapped_range().to_vec();
         output_buffer.unmap();
@@ -429,7 +491,7 @@ impl Renderer for WebGpuRenderer {
         canvas: &web_sys::HtmlCanvasElement,
     ) -> Result<(), RendererError> {
         self.ensure_initialized().await?;
-        
+
         // For render_to_canvas, we need a surface.
         // But creating a surface requires the instance and the canvas.
         // And the surface must be compatible with the adapter.
@@ -437,14 +499,16 @@ impl Renderer for WebGpuRenderer {
         // However, we passed `compatible_surface: None` in init.
         // In WebGPU, usually any adapter works for any canvas?
         // Let's try to create a surface.
-        
+
         let instance = &self.instance;
         let target = wgpu::SurfaceTarget::Canvas(canvas.clone());
-        let surface = instance.create_surface(target).map_err(|e| RendererError::InitFailed(e.to_string()))?;
+        let surface = instance
+            .create_surface(target)
+            .map_err(|e| RendererError::InitFailed(e.to_string()))?;
         let adapter = self.adapter.as_ref().unwrap();
         let device = self.device.as_ref().unwrap();
         let queue = self.queue.as_ref().unwrap();
-        
+
         // Configure surface
         let caps = surface.get_capabilities(adapter);
         let config = wgpu::SurfaceConfiguration {
@@ -458,30 +522,30 @@ impl Renderer for WebGpuRenderer {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(device, &config);
-        
+
         // We need to rebuild the pipeline if the format is different?
         // Our pipeline is built for Rgba8Unorm.
         // If surface format is different (e.g. Bgra8Unorm), we need a new pipeline or a compatible one.
         // For simplicity, let's assume we can just use a new pipeline or the same one if formats match.
         // But to be robust, we should probably create the pipeline on the fly or cache it by format.
         // For this task, let's just create a new pipeline for the surface format if it differs.
-        
+
         let target_format = config.format;
-        
+
         // Re-create pipeline for this format
         // (Copy-paste pipeline creation logic, or refactor. Refactoring is better but for now let's inline)
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("QuickFix Shader"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(WGSL_SHADER)),
         });
-        
+
         let bind_group_layout = self.bind_group_layout.as_ref().unwrap();
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("QuickFix Pipeline Layout"),
             bind_group_layouts: &[bind_group_layout],
             push_constant_ranges: &[],
         });
-        
+
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("QuickFix Pipeline Surface"),
             layout: Some(&pipeline_layout),
@@ -536,15 +600,52 @@ impl Renderer for WebGpuRenderer {
 
         // Uniforms (same as render)
         let uniforms = SettingsUniform {
-            geo_vertical: settings.geometry.as_ref().and_then(|g| g.vertical).unwrap_or(0.0),
-            geo_horizontal: settings.geometry.as_ref().and_then(|g| g.horizontal).unwrap_or(0.0),
-            crop_rotation: settings.crop.as_ref().and_then(|c| c.rotation).unwrap_or(0.0).to_radians(),
-            crop_aspect: settings.crop.as_ref().and_then(|c| c.aspect_ratio).unwrap_or(0.0),
-            exposure: settings.exposure.as_ref().and_then(|e| e.exposure).unwrap_or(0.0),
-            contrast: settings.exposure.as_ref().and_then(|e| e.contrast).unwrap_or(1.0),
-            highlights: settings.exposure.as_ref().and_then(|e| e.highlights).unwrap_or(0.0),
-            shadows: settings.exposure.as_ref().and_then(|e| e.shadows).unwrap_or(0.0),
-            temp: settings.color.as_ref().and_then(|c| c.temperature).unwrap_or(0.0),
+            geo_vertical: settings
+                .geometry
+                .as_ref()
+                .and_then(|g| g.vertical)
+                .unwrap_or(0.0),
+            geo_horizontal: settings
+                .geometry
+                .as_ref()
+                .and_then(|g| g.horizontal)
+                .unwrap_or(0.0),
+            crop_rotation: settings
+                .crop
+                .as_ref()
+                .and_then(|c| c.rotation)
+                .unwrap_or(0.0)
+                .to_radians(),
+            crop_aspect: settings
+                .crop
+                .as_ref()
+                .and_then(|c| c.aspect_ratio)
+                .unwrap_or(0.0),
+            exposure: settings
+                .exposure
+                .as_ref()
+                .and_then(|e| e.exposure)
+                .unwrap_or(0.0),
+            contrast: settings
+                .exposure
+                .as_ref()
+                .and_then(|e| e.contrast)
+                .unwrap_or(1.0),
+            highlights: settings
+                .exposure
+                .as_ref()
+                .and_then(|e| e.highlights)
+                .unwrap_or(0.0),
+            shadows: settings
+                .exposure
+                .as_ref()
+                .and_then(|e| e.shadows)
+                .unwrap_or(0.0),
+            temp: settings
+                .color
+                .as_ref()
+                .and_then(|c| c.temperature)
+                .unwrap_or(0.0),
             tint: settings.color.as_ref().and_then(|c| c.tint).unwrap_or(0.0),
             grain_amount: settings.grain.as_ref().map(|g| g.amount).unwrap_or(0.0),
             grain_size: match settings.grain.as_ref().map(|g| g.size.as_str()) {
@@ -582,7 +683,13 @@ impl Renderer for WebGpuRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&self.grain_texture.as_ref().unwrap().create_view(&Default::default())),
+                    resource: wgpu::BindingResource::TextureView(
+                        &self
+                            .grain_texture
+                            .as_ref()
+                            .unwrap()
+                            .create_view(&Default::default()),
+                    ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
@@ -592,9 +699,13 @@ impl Renderer for WebGpuRenderer {
         });
 
         // Render to Surface
-        let frame = surface.get_current_texture().map_err(|e| RendererError::RenderFailed(e.to_string()))?;
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        
+        let frame = surface
+            .get_current_texture()
+            .map_err(|e| RendererError::RenderFailed(e.to_string()))?;
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });

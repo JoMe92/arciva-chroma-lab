@@ -7,10 +7,10 @@ channels = ["conda-forge"]
 platforms = ["linux-64"]
 
 [tasks]
-dev = "cd examples/minimal-viewer && pnpm run dev"
+
 dev-example = "cd examples/minimal-viewer && pnpm run dev"
 test = "cargo test"
-lint = { cmd = "cargo fmt --check && cargo clippy -- -D warnings", depends-on = ["install"] }
+lint = { cmd = "cargo fmt --check && cargo clippy --target wasm32-unknown-unknown -- -D warnings", depends-on = ["install"] }
 build = "pnpm run build"
 install = "pnpm install"
 

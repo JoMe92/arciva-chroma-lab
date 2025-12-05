@@ -1,6 +1,5 @@
 use crate::QuickFixAdjustments;
 use async_trait::async_trait;
-use wasm_bindgen::prelude::*;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RendererError {
