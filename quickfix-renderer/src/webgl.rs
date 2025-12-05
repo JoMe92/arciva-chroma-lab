@@ -15,7 +15,52 @@ pub struct WebGlRenderer {
     texture: Option<glow::Texture>,
     grain_texture: Option<glow::Texture>,
 
-    canvas: Option<HtmlCanvasElement>, // Keep reference if we created context from it
+    canvas: Option<CanvasBackend>, // Keep reference if we created context from it
+}
+
+#[derive(Clone)]
+enum CanvasBackend {
+    Html(HtmlCanvasElement),
+    Offscreen(web_sys::OffscreenCanvas),
+}
+
+impl CanvasBackend {
+    fn width(&self) -> u32 {
+        match self {
+            CanvasBackend::Html(c) => c.width(),
+            CanvasBackend::Offscreen(c) => c.width(),
+        }
+    }
+
+    fn height(&self) -> u32 {
+        match self {
+            CanvasBackend::Html(c) => c.height(),
+            CanvasBackend::Offscreen(c) => c.height(),
+        }
+    }
+
+    fn set_width(&self, width: u32) {
+        match self {
+            CanvasBackend::Html(c) => c.set_width(width),
+            CanvasBackend::Offscreen(c) => c.set_width(width),
+        }
+    }
+
+    fn set_height(&self, height: u32) {
+        match self {
+            CanvasBackend::Html(c) => c.set_height(height),
+            CanvasBackend::Offscreen(c) => c.set_height(height),
+        }
+    }
+}
+
+impl PartialEq<HtmlCanvasElement> for CanvasBackend {
+    fn eq(&self, other: &HtmlCanvasElement) -> bool {
+        match self {
+            CanvasBackend::Html(c) => c == other,
+            _ => false,
+        }
+    }
 }
 
 impl Default for WebGlRenderer {
@@ -44,7 +89,10 @@ impl WebGlRenderer {
         // If we have a context, check if it matches the requested canvas
         if let Some(current_ctx_canvas) = &self.canvas {
             if let Some(requested_canvas) = canvas {
-                if current_ctx_canvas != requested_canvas {
+                if current_ctx_canvas == requested_canvas { // Use PartialEq for comparison
+                    // Canvas matches, no need to re-initialize
+                    return Ok(());
+                } else {
                     // Canvas changed, we must re-initialize
                     self.context = None;
                     self.program = None;
@@ -53,6 +101,14 @@ impl WebGlRenderer {
                     self.grain_texture = None;
                     self.canvas = None;
                 }
+            } else {
+                // No canvas requested, but we have one. Re-initialize to offscreen or new HtmlCanvas.
+                self.context = None;
+                self.program = None;
+                self.vao = None;
+                self.texture = None;
+                self.grain_texture = None;
+                self.canvas = None;
             }
         }
 
@@ -68,26 +124,57 @@ impl WebGlRenderer {
                 .ok_or(RendererError::WebGl2NotSupported)?
                 .dyn_into::<web_sys::WebGl2RenderingContext>()
                 .map_err(|_| RendererError::WebGl2NotSupported)?;
-            (glow::Context::from_webgl2_context(context), c.clone())
+            (glow::Context::from_webgl2_context(context), CanvasBackend::Html(c.clone()))
         } else {
-            // Create offscreen canvas
-            let doc = web_sys::window().unwrap().document().unwrap();
-            let c = doc
-                .create_element("canvas")
-                .unwrap()
-                .dyn_into::<HtmlCanvasElement>()
-                .unwrap();
-            c.set_width(1);
-            c.set_height(1);
-
-            let context = c
-                .get_context("webgl2")
-                .map_err(|_| RendererError::WebGl2NotSupported)?
-                .ok_or(RendererError::WebGl2NotSupported)?
-                .dyn_into::<web_sys::WebGl2RenderingContext>()
-                .map_err(|_| RendererError::WebGl2NotSupported)?;
-
-            (glow::Context::from_webgl2_context(context), c)
+            // Try creating a canvas via document (Main Thread)
+            if let Some(window) = web_sys::window() {
+                if let Some(doc) = window.document() {
+                    if let Ok(el) = doc.create_element("canvas") {
+                        if let Ok(c) = el.dyn_into::<HtmlCanvasElement>() {
+                            c.set_width(1);
+                            c.set_height(1);
+                            let context = c
+                                .get_context("webgl2")
+                                .map_err(|_| RendererError::WebGl2NotSupported)?
+                                .ok_or(RendererError::WebGl2NotSupported)?
+                                .dyn_into::<web_sys::WebGl2RenderingContext>()
+                                .map_err(|_| RendererError::WebGl2NotSupported)?;
+                            
+                            (glow::Context::from_webgl2_context(context), CanvasBackend::Html(c))
+                        } else {
+                             return Err(RendererError::WebGl2NotSupported);
+                        }
+                    } else {
+                         return Err(RendererError::WebGl2NotSupported);
+                    }
+                } else {
+                    // Worker fallback (no document)
+                     if let Ok(c) = web_sys::OffscreenCanvas::new(1, 1) {
+                         let context = c
+                            .get_context("webgl2")
+                            .map_err(|_| RendererError::WebGl2NotSupported)?
+                            .ok_or(RendererError::WebGl2NotSupported)?
+                            .dyn_into::<web_sys::WebGl2RenderingContext>()
+                            .map_err(|_| RendererError::WebGl2NotSupported)?;
+                         (glow::Context::from_webgl2_context(context), CanvasBackend::Offscreen(c))
+                     } else {
+                         return Err(RendererError::WebGl2NotSupported);
+                     }
+                }
+            } else {
+                // Worker fallback (no window)
+                 if let Ok(c) = web_sys::OffscreenCanvas::new(1, 1) {
+                     let context = c
+                        .get_context("webgl2")
+                        .map_err(|_| RendererError::WebGl2NotSupported)?
+                        .ok_or(RendererError::WebGl2NotSupported)?
+                        .dyn_into::<web_sys::WebGl2RenderingContext>()
+                        .map_err(|_| RendererError::WebGl2NotSupported)?;
+                     (glow::Context::from_webgl2_context(context), CanvasBackend::Offscreen(c))
+                 } else {
+                     return Err(RendererError::WebGl2NotSupported);
+                 }
+            }
         };
 
         self.canvas = Some(used_canvas);

@@ -10,6 +10,11 @@ pub mod webgl;
 #[cfg(target_arch = "wasm32")]
 pub mod webgpu;
 
+#[wasm_bindgen]
+pub fn init_panic_hook() {
+    console_error_panic_hook::set_once();
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CropSettings {
     pub rotation: Option<f32>,

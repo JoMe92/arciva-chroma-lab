@@ -1,15 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
-import init, { QuickFixRenderer } from 'quickfix-renderer';
+
 
 // Initialize WASM once
-await init();
+
 
 function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [renderer, setRenderer] = useState<QuickFixRenderer | null>(null);
+  const workerRef = useRef<Worker | null>(null);
+  const pendingRequests = useRef<Map<number, { resolve: (data: any) => void, reject: (err: any) => void }>>(new Map());
+  const requestCounter = useRef(0);
   const [backend, setBackend] = useState<string>('auto');
+  const [currentBackend, setCurrentBackend] = useState<string>('initializing...');
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [imageData, setImageData] = useState<Uint8Array | null>(null);
+  const [isRendering, setIsRendering] = useState(false);
 
   // Settings
   const [exposure, setExposure] = useState(0);
@@ -20,14 +24,83 @@ function App() {
   const [grainSize, setGrainSize] = useState('medium');
   const [rotation, setRotation] = useState(0);
 
+  // Helper to send message to worker and wait for response
+  const sendWorkerMessage = (type: string, payload: any): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      if (!workerRef.current) {
+        reject(new Error("Worker not initialized"));
+        return;
+      }
+      const id = requestCounter.current++;
+      pendingRequests.current.set(id, { resolve, reject });
+      workerRef.current.postMessage({ type, payload, id });
+    });
+  };
+
+  // Initialize Worker
+  useEffect(() => {
+    console.log("App: Initializing worker...");
+    const worker = new Worker(new URL('./worker.ts', import.meta.url), {
+      type: 'module'
+    });
+
+    worker.onerror = (e) => {
+      console.error("App: Worker Error Event:", e);
+    };
+
+    worker.onmessage = (e) => {
+      const { id, success, error, ...rest } = e.data;
+      const request = pendingRequests.current.get(id);
+      if (request) {
+        pendingRequests.current.delete(id);
+        if (success) {
+          request.resolve(rest);
+        } else {
+          console.error("App: Worker returned error:", error);
+          request.reject(new Error(error));
+        }
+      } else {
+        console.warn("App: Received message for unknown request", id);
+      }
+    };
+
+    workerRef.current = worker;
+
+    return () => {
+      console.log("App: Terminating worker");
+      worker.terminate();
+    };
+  }, []);
+
+  // Initialize Renderer in Worker
+  useEffect(() => {
+    console.log("App: initBackend effect running", { backend, workerExists: !!workerRef.current });
+    if (!workerRef.current) {
+      console.warn("App: workerRef is null, skipping initBackend");
+      return;
+    }
+
+    async function initBackend() {
+      console.log("App: initBackend called");
+      setCurrentBackend('initializing...');
+      try {
+        const res = await sendWorkerMessage('init', { backend });
+        setCurrentBackend(res.backend);
+        console.log(`Worker initialized backend: ${res.backend}`);
+      } catch (e) {
+        console.error("Failed to init backend:", e);
+        setCurrentBackend("Error");
+      }
+    }
+    initBackend();
+  }, [backend]);
+
   // Load default image
   useEffect(() => {
     const img = new Image();
-    img.src = '/sample.jpg'; // Ensure this exists or use a placeholder
+    img.src = '/sample.jpg';
     img.onload = () => {
       setImage(img);
-
-      // Get raw bytes
       const canvas = document.createElement('canvas');
       canvas.width = img.width;
       canvas.height = img.height;
@@ -35,69 +108,95 @@ function App() {
       if (ctx) {
         ctx.drawImage(img, 0, 0);
         const data = ctx.getImageData(0, 0, img.width, img.height).data;
-        setImageData(new Uint8Array(data.buffer));
-
-        // Set initial canvas size
+        setImageData(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
         if (canvasRef.current) {
           canvasRef.current.width = img.width;
           canvasRef.current.height = img.height;
         }
       }
     };
-    img.onerror = (e) => { };
   }, []);
-
-  // Initialize Renderer
-  useEffect(() => {
-    async function initRenderer() {
-      try {
-        const r = await new QuickFixRenderer(backend === 'auto' ? undefined : backend);
-        setRenderer(r);
-        console.log(`Renderer initialized: ${r.backend}`);
-      } catch (e) {
-        console.error("Failed to init renderer:", e);
-      }
-    }
-    initRenderer();
-  }, [backend]);
 
   // Render Loop
   useEffect(() => {
-    if (!renderer || !imageData || !image || !canvasRef.current) return;
+    console.log("App: Render effect triggered", {
+      hasWorker: !!workerRef.current,
+      hasImageData: !!imageData,
+      hasImage: !!image,
+      hasCanvas: !!canvasRef.current,
+      isRendering,
+      currentBackend
+    });
+
+    if (!workerRef.current || !imageData || !image || !canvasRef.current || isRendering) {
+      console.log("App: Render skipped due to missing dependencies or busy state");
+      return;
+    }
+    if (currentBackend === 'initializing...' || currentBackend === 'Error') {
+      console.log("App: Render skipped due to backend state:", currentBackend);
+      return;
+    }
 
     const render = async () => {
+      setIsRendering(true);
       const settings = {
         exposure: { exposure, contrast },
         color: { temperature: temp, tint },
         grain: { amount: grainAmount, size: grainSize },
         crop: { rotation },
-        geometry: { vertical: 0, horizontal: 0 } // TODO: Add sliders
+        geometry: { vertical: 0, horizontal: 0 }
       };
 
       try {
-        const start = performance.now();
-
-        // Explicitly resize canvas to match image dimensions to prevent clipping
-        if (canvasRef.current.width !== image.width || canvasRef.current.height !== image.height) {
-          canvasRef.current.width = image.width;
-          canvasRef.current.height = image.height;
+        // Explicitly resize canvas
+        if (canvasRef.current!.width !== image.width || canvasRef.current!.height !== image.height) {
+          canvasRef.current!.width = image.width;
+          canvasRef.current!.height = image.height;
         }
 
-        await renderer.render_to_canvas(
+        console.log("Sending render request to worker", { width: image.width, height: image.height, dataSize: imageData.byteLength });
+        const res = await sendWorkerMessage('render', {
           imageData,
-          image.width,
-          image.height,
-          settings,
-          canvasRef.current
-        );
-        const end = performance.now();
+          width: image.width,
+          height: image.height,
+          adjustments: settings
+        });
+
+        const { data, width, height } = res;
+        console.log("Worker response:", { width, height, dataSize: data.byteLength });
+
+        const ctx = canvasRef.current!.getContext('2d');
+        if (ctx) {
+          // Check if data has content
+          if (data.length > 0 && data[0] === 0 && data[1] === 0 && data[2] === 0 && data[3] === 0) {
+            console.warn("First pixel is transparent black!");
+          }
+
+          // Create ImageData from buffer
+          const clamped = new Uint8ClampedArray(data.buffer);
+          const imgData = new ImageData(clamped, width, height);
+
+          // Handle resize if output size changed (e.g. crop)
+          if (canvasRef.current!.width !== width || canvasRef.current!.height !== height) {
+            canvasRef.current!.width = width;
+            canvasRef.current!.height = height;
+          }
+
+          ctx.putImageData(imgData, 0, 0);
+        }
       } catch (e) {
         console.error("Render failed:", e);
+      } finally {
+        setIsRendering(false);
       }
     };
 
+    // Debounce or just run? 
+    // Since we have isRendering flag, we skip if busy. 
+    // But we should probably queue the latest request if one comes in while busy.
+    // For now, simple skip is okay for "minimal-viewer".
     render();
-  }, [renderer, imageData, image, exposure, contrast, temp, tint, grainAmount, grainSize, rotation]);
+  }, [imageData, image, exposure, contrast, temp, tint, grainAmount, grainSize, rotation, currentBackend]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
@@ -111,7 +210,7 @@ function App() {
           <option value="webgl2">WebGL2</option>
           <option value="cpu">CPU</option>
         </select>
-        <span> Current: {renderer?.backend}</span>
+        <span> Current: {currentBackend}</span>
       </div>
 
       <div style={{ display: 'flex', gap: '1rem' }}>

@@ -374,7 +374,10 @@ fn apply_grain_in_place(img: &mut RgbaImage, settings: &GrainSettings) {
     // Deterministic RNG
     let seed = settings.seed.unwrap_or(42);
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    let normal = Normal::new(0.0, sigma).unwrap();
+    let normal = match Normal::new(0.0, sigma) {
+        Ok(n) => n,
+        Err(_) => return, // Should not happen given check above, but safe fallback
+    };
 
     // Generate noise buffer
     let mut noise_buffer = vec![0.0f32; (noise_w * noise_h) as usize];
@@ -422,9 +425,9 @@ mod tests {
             ..Default::default()
         };
         apply_exposure_in_place(&mut img, &settings);
-        
+
         let px = img.get_pixel(0, 0);
-        // 100/255 * 2 = 200/255 approx. 
+        // 100/255 * 2 = 200/255 approx.
         // 100 * 2 = 200.
         assert!(px[0] >= 199 && px[0] <= 201);
     }
@@ -437,7 +440,7 @@ mod tests {
             ..Default::default()
         };
         apply_color_balance_in_place(&mut img, &settings);
-        
+
         let px = img.get_pixel(0, 0);
         assert!(px[0] > 128); // Red increased
         assert!(px[2] < 128); // Blue decreased
@@ -451,7 +454,7 @@ mod tests {
             ..Default::default()
         };
         let res = apply_crop_rotate(&img, &settings);
-        
+
         assert_eq!(res.width(), 100);
         assert_eq!(res.height(), 50); // Should be cropped to height 50
     }
