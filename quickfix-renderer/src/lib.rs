@@ -2,6 +2,7 @@ use crate::renderer::{Renderer, RendererError};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
+pub mod api_types;
 pub mod operations;
 pub mod renderer;
 pub mod shaders;
@@ -9,6 +10,8 @@ pub mod shaders;
 pub mod webgl;
 #[cfg(target_arch = "wasm32")]
 pub mod webgpu;
+
+use api_types::{ProcessOptions, RendererOptions};
 
 #[wasm_bindgen]
 pub fn init_panic_hook() {
@@ -57,6 +60,47 @@ pub struct QuickFixAdjustments {
     pub geometry: Option<GeometrySettings>,
 }
 
+#[wasm_bindgen(typescript_custom_section)]
+const TS_APPEND_CONTENT: &'static str = r#"
+export interface CropSettings {
+    rotation?: number;
+    aspect_ratio?: number;
+}
+
+export interface ExposureSettings {
+    exposure?: number;
+    contrast?: number;
+    highlights?: number;
+    highlight_saturation?: number;
+    shadows?: number;
+    shadow_saturation?: number;
+}
+
+export interface ColorSettings {
+    temperature?: number;
+    tint?: number;
+}
+
+export interface GrainSettings {
+    amount: number;
+    size: "fine" | "medium" | "coarse";
+    seed?: number;
+}
+
+export interface GeometrySettings {
+    vertical?: number;
+    horizontal?: number;
+}
+
+export interface QuickFixAdjustments {
+    crop?: CropSettings;
+    exposure?: ExposureSettings;
+    color?: ColorSettings;
+    grain?: GrainSettings;
+    geometry?: GeometrySettings;
+}
+"#;
+
 impl QuickFixAdjustments {
     pub fn new() -> QuickFixAdjustments {
         QuickFixAdjustments::default()
@@ -78,9 +122,9 @@ impl FrameResult {
     }
 }
 
-// Legacy CPU synchronous entry point
+// Legacy CPU synchronous entry point - kept for backward compat or direct usage
 #[wasm_bindgen]
-pub fn process_frame(
+pub fn process_frame_sync(
     data: &mut [u8],
     width: u32,
     height: u32,
@@ -165,8 +209,14 @@ pub struct QuickFixRenderer {
 
 #[wasm_bindgen]
 impl QuickFixRenderer {
-    pub async fn create(force_backend: Option<String>) -> Result<QuickFixRenderer, JsValue> {
-        let force = force_backend.as_deref();
+    // Replaces the old create method with init, matching the requirement
+    pub async fn init(options: Option<RendererOptions>) -> Result<QuickFixRenderer, JsValue> {
+        let options = options.unwrap_or(RendererOptions {
+            preferred_backend: None,
+            max_preview_size: None,
+        });
+
+        let force = options.preferred_backend.as_deref();
 
         // 1. Try WebGPU (WASM only)
         #[cfg(target_arch = "wasm32")]
@@ -219,12 +269,13 @@ impl QuickFixRenderer {
         self.backend_name.clone()
     }
 
-    pub async fn render(
+    pub async fn process_frame(
         &mut self,
         data: &[u8],
         width: u32,
         height: u32,
         adjustments: JsValue,
+        _options: Option<ProcessOptions>,
     ) -> Result<FrameResult, JsValue> {
         let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
         let result = self
@@ -240,6 +291,7 @@ impl QuickFixRenderer {
         })
     }
 
+    // Keep render_to_canvas for convenience if passing a canvas directly
     pub async fn render_to_canvas(
         &mut self,
         data: &[u8],

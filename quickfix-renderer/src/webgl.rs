@@ -89,7 +89,8 @@ impl WebGlRenderer {
         // If we have a context, check if it matches the requested canvas
         if let Some(current_ctx_canvas) = &self.canvas {
             if let Some(requested_canvas) = canvas {
-                if current_ctx_canvas == requested_canvas { // Use PartialEq for comparison
+                if current_ctx_canvas == requested_canvas {
+                    // Use PartialEq for comparison
                     // Canvas matches, no need to re-initialize
                     return Ok(());
                 } else {
@@ -124,7 +125,10 @@ impl WebGlRenderer {
                 .ok_or(RendererError::WebGl2NotSupported)?
                 .dyn_into::<web_sys::WebGl2RenderingContext>()
                 .map_err(|_| RendererError::WebGl2NotSupported)?;
-            (glow::Context::from_webgl2_context(context), CanvasBackend::Html(c.clone()))
+            (
+                glow::Context::from_webgl2_context(context),
+                CanvasBackend::Html(c.clone()),
+            )
         } else {
             // Try creating a canvas via document (Main Thread)
             if let Some(window) = web_sys::window() {
@@ -139,41 +143,50 @@ impl WebGlRenderer {
                                 .ok_or(RendererError::WebGl2NotSupported)?
                                 .dyn_into::<web_sys::WebGl2RenderingContext>()
                                 .map_err(|_| RendererError::WebGl2NotSupported)?;
-                            
-                            (glow::Context::from_webgl2_context(context), CanvasBackend::Html(c))
+
+                            (
+                                glow::Context::from_webgl2_context(context),
+                                CanvasBackend::Html(c),
+                            )
                         } else {
-                             return Err(RendererError::WebGl2NotSupported);
+                            return Err(RendererError::WebGl2NotSupported);
                         }
                     } else {
-                         return Err(RendererError::WebGl2NotSupported);
+                        return Err(RendererError::WebGl2NotSupported);
                     }
                 } else {
                     // Worker fallback (no document)
-                     if let Ok(c) = web_sys::OffscreenCanvas::new(1, 1) {
-                         let context = c
+                    if let Ok(c) = web_sys::OffscreenCanvas::new(1, 1) {
+                        let context = c
                             .get_context("webgl2")
                             .map_err(|_| RendererError::WebGl2NotSupported)?
                             .ok_or(RendererError::WebGl2NotSupported)?
                             .dyn_into::<web_sys::WebGl2RenderingContext>()
                             .map_err(|_| RendererError::WebGl2NotSupported)?;
-                         (glow::Context::from_webgl2_context(context), CanvasBackend::Offscreen(c))
-                     } else {
-                         return Err(RendererError::WebGl2NotSupported);
-                     }
+                        (
+                            glow::Context::from_webgl2_context(context),
+                            CanvasBackend::Offscreen(c),
+                        )
+                    } else {
+                        return Err(RendererError::WebGl2NotSupported);
+                    }
                 }
             } else {
                 // Worker fallback (no window)
-                 if let Ok(c) = web_sys::OffscreenCanvas::new(1, 1) {
-                     let context = c
+                if let Ok(c) = web_sys::OffscreenCanvas::new(1, 1) {
+                    let context = c
                         .get_context("webgl2")
                         .map_err(|_| RendererError::WebGl2NotSupported)?
                         .ok_or(RendererError::WebGl2NotSupported)?
                         .dyn_into::<web_sys::WebGl2RenderingContext>()
                         .map_err(|_| RendererError::WebGl2NotSupported)?;
-                     (glow::Context::from_webgl2_context(context), CanvasBackend::Offscreen(c))
-                 } else {
-                     return Err(RendererError::WebGl2NotSupported);
-                 }
+                    (
+                        glow::Context::from_webgl2_context(context),
+                        CanvasBackend::Offscreen(c),
+                    )
+                } else {
+                    return Err(RendererError::WebGl2NotSupported);
+                }
             }
         };
 

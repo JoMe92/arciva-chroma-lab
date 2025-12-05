@@ -1,4 +1,4 @@
-import init, { QuickFixRenderer, init_panic_hook } from 'quickfix-renderer';
+import init, { QuickFixRenderer, init_panic_hook, RendererOptions } from 'quickfix-renderer';
 
 console.log("Worker script loaded");
 
@@ -44,7 +44,8 @@ ctx.onmessage = async (e) => {
             const { backend } = payload;
             console.log(`Worker initializing renderer with backend: ${backend}`);
             try {
-                renderer = await QuickFixRenderer.create(backend === 'auto' ? undefined : backend);
+                const options = new RendererOptions(backend === 'auto' ? undefined : backend);
+                renderer = await QuickFixRenderer.init(options);
                 console.log(`Worker renderer created: ${renderer.backend}`);
                 ctx.postMessage({ type: 'init_result', id, success: true, backend: renderer.backend });
             } catch (createErr) {
@@ -64,7 +65,7 @@ ctx.onmessage = async (e) => {
 
             // Render
             // adjustments is already a plain object matching the struct structure
-            const result = await renderer.render(imageData, width, height, adjustments);
+            const result = await renderer.process_frame(imageData, width, height, adjustments);
 
             // Transfer buffer back
             const data = result.data;
