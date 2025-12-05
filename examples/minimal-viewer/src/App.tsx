@@ -78,6 +78,14 @@ function App() {
 
       try {
         const start = performance.now();
+
+        // Explicitly resize canvas to match image dimensions to prevent clipping
+        if (canvasRef.current.width !== image.width || canvasRef.current.height !== image.height) {
+          console.log(`Resizing canvas in TS from ${canvasRef.current.width}x${canvasRef.current.height} to ${image.width}x${image.height}`);
+          canvasRef.current.width = image.width;
+          canvasRef.current.height = image.height;
+        }
+
         await renderer.render_to_canvas(
           imageData,
           image.width,
@@ -87,6 +95,7 @@ function App() {
         );
         const end = performance.now();
         console.log(`Render time: ${(end - start).toFixed(2)}ms`);
+        console.log(`Canvas dims: ${canvasRef.current.width}x${canvasRef.current.height}, Client dims: ${canvasRef.current.clientWidth}x${canvasRef.current.clientHeight}`);
       } catch (e) {
         console.error("Render failed:", e);
       }
@@ -113,7 +122,14 @@ function App() {
       <div style={{ display: 'flex', gap: '1rem' }}>
         <canvas
           ref={canvasRef}
-          style={{ border: '1px solid #ccc', maxWidth: '100%', maxHeight: '600px' }}
+          key={backend}
+          style={{
+            border: '1px solid #ccc',
+            maxWidth: '100%',
+            maxHeight: '80vh',
+            objectFit: 'contain',
+            display: 'block'
+          }}
         />
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', minWidth: '300px' }}>

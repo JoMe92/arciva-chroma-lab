@@ -30,25 +30,38 @@ impl WebGlRenderer {
     }
 
     fn ensure_initialized(&mut self, canvas: Option<&HtmlCanvasElement>) -> Result<(), RendererError> {
+        // Check if we need to re-initialize
+        // If we have a context, check if it matches the requested canvas
+        if let Some(current_ctx_canvas) = &self.canvas {
+            if let Some(requested_canvas) = canvas {
+                if current_ctx_canvas != requested_canvas {
+                    // Canvas changed, we must re-initialize
+                    self.context = None;
+                    self.program = None;
+                    self.vao = None;
+                    self.texture = None;
+                    self.grain_texture = None;
+                    self.canvas = None;
+                }
+            }
+        }
+
         if self.context.is_some() {
             return Ok(());
         }
 
-        // If canvas is provided, use it. Otherwise create an offscreen canvas?
-        // WebGL requires a canvas.
-        // If we are just processing frames (readback), we need an offscreen canvas.
-        let gl = if let Some(c) = canvas {
+        // If canvas is provided, use it. Otherwise create an offscreen canvas
+        let (gl, used_canvas) = if let Some(c) = canvas {
             let context = c.get_context("webgl2")
                 .map_err(|_| RendererError::WebGl2NotSupported)?
                 .ok_or(RendererError::WebGl2NotSupported)?
                 .dyn_into::<web_sys::WebGl2RenderingContext>()
                 .map_err(|_| RendererError::WebGl2NotSupported)?;
-            glow::Context::from_webgl2_context(context)
+            (glow::Context::from_webgl2_context(context), c.clone())
         } else {
             // Create offscreen canvas
             let doc = web_sys::window().unwrap().document().unwrap();
             let c = doc.create_element("canvas").unwrap().dyn_into::<HtmlCanvasElement>().unwrap();
-            // Set some size?
             c.set_width(1);
             c.set_height(1);
             
@@ -58,9 +71,10 @@ impl WebGlRenderer {
                 .dyn_into::<web_sys::WebGl2RenderingContext>()
                 .map_err(|_| RendererError::WebGl2NotSupported)?;
             
-            self.canvas = Some(c);
-            glow::Context::from_webgl2_context(context)
+            (glow::Context::from_webgl2_context(context), c)
         };
+        
+        self.canvas = Some(used_canvas);
 
         unsafe {
             let program = gl.create_program().map_err(RendererError::InitFailed)?;
