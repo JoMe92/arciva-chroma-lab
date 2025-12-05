@@ -1,0 +1,27 @@
+[package]
+name = "quickfix-renderer"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["cpu"]
+cpu = []
+webgl2 = []
+webgpu = []
+
+[dependencies]
+wasm-bindgen = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+console_error_panic_hook = "0.1"
+image = { version = "0.24", optional = true }
+ndarray = { version = "0.15", optional = true }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "console",
+]

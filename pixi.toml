@@ -1,0 +1,20 @@
+[workspace]
+name = "chroma-lab"
+version = "0.1.0"
+description = "Rust/WASM Quick Fix Renderer"
+authors = ["Antigravity <antigravity@google.com>"]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tasks]
+dev = "cd examples/minimal-viewer && vite"
+test = "cargo test"
+lint = { cmd = "cargo fmt --check && cargo clippy -- -D warnings", depends-on = ["install"] }
+build = "pnpm run build"
+install = "pnpm install"
+
+[dependencies]
+rust = ">=1.75"
+rust-std-wasm32-unknown-unknown = ">=1.75"
+nodejs = ">=20"
+pnpm = ">=8"
