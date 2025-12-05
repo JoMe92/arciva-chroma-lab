@@ -25,7 +25,6 @@ function App() {
     const img = new Image();
     img.src = '/sample.jpg'; // Ensure this exists or use a placeholder
     img.onload = () => {
-      console.log("Image loaded:", img.width, img.height);
       setImage(img);
 
       // Get raw bytes
@@ -36,7 +35,6 @@ function App() {
       if (ctx) {
         ctx.drawImage(img, 0, 0);
         const data = ctx.getImageData(0, 0, img.width, img.height).data;
-        console.log("Image data extracted, length:", data.length);
         setImageData(new Uint8Array(data.buffer));
 
         // Set initial canvas size
@@ -46,7 +44,7 @@ function App() {
         }
       }
     };
-    img.onerror = (e) => console.error("Failed to load image:", e);
+    img.onerror = (e) => { };
   }, []);
 
   // Initialize Renderer
@@ -81,7 +79,6 @@ function App() {
 
         // Explicitly resize canvas to match image dimensions to prevent clipping
         if (canvasRef.current.width !== image.width || canvasRef.current.height !== image.height) {
-          console.log(`Resizing canvas in TS from ${canvasRef.current.width}x${canvasRef.current.height} to ${image.width}x${image.height}`);
           canvasRef.current.width = image.width;
           canvasRef.current.height = image.height;
         }
@@ -94,8 +91,6 @@ function App() {
           canvasRef.current
         );
         const end = performance.now();
-        console.log(`Render time: ${(end - start).toFixed(2)}ms`);
-        console.log(`Canvas dims: ${canvasRef.current.width}x${canvasRef.current.height}, Client dims: ${canvasRef.current.clientWidth}x${canvasRef.current.clientHeight}`);
       } catch (e) {
         console.error("Render failed:", e);
       }

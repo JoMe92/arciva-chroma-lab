@@ -106,15 +106,10 @@ impl Renderer for CpuRenderer {
     }
     async fn render_to_canvas(&mut self, data: &[u8], width: u32, height: u32, settings: &QuickFixAdjustments, canvas: &web_sys::HtmlCanvasElement) -> Result<(), RendererError> {
         let mut data_vec = data.to_vec();
-        web_sys::console::log_1(&format!("CPU Render input: {}x{}, len {}", width, height, data.len()).into());
-        
         let (res, w, h) = operations::process_frame_internal(&mut data_vec, width, height, settings)
             .map_err(|e| RendererError::RenderFailed(e))?;
             
-        web_sys::console::log_1(&format!("CPU Render output: {}x{}, len {}", w, h, res.len()).into());
-            
         if canvas.width() != w || canvas.height() != h {
-            web_sys::console::log_1(&format!("Resizing canvas from {}x{} to {}x{}", canvas.width(), canvas.height(), w, h).into());
             canvas.set_width(w);
             canvas.set_height(h);
         }
