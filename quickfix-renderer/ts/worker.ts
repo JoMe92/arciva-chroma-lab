@@ -14,6 +14,9 @@ let wasmInitPromise: Promise<void> | null = null;
 // Track the latest request ID to implement cancellation/superseding
 let latestRequestId = 0;
 
+// Store source image data to avoid re-transferring on every render
+let sourceImage: Uint8Array | null = null;
+
 /**
  * Initializes the WASM module if not already initialized.
  */
@@ -48,6 +51,21 @@ ctx.onmessage = async (e: MessageEvent<WorkerMessage>) => {
                 ctx.postMessage(response);
                 break;
 
+            case 'SET_IMAGE':
+                const { imageData: newImage, width: w, height: h } = msg.payload;
+                if (newImage instanceof ImageBitmap) {
+                    const osc = new OffscreenCanvas(w, h);
+                    const osCtx = osc.getContext('2d');
+                    if (!osCtx) throw new Error("Could not get OffscreenCanvas context");
+                    osCtx.drawImage(newImage, 0, 0);
+                    const id = osCtx.getImageData(0, 0, w, h);
+                    sourceImage = new Uint8Array(id.data.buffer);
+                } else {
+                    sourceImage = new Uint8Array(newImage as ArrayBuffer);
+                }
+                // console.log("Worker: Image set", w, h);
+                break;
+
             case 'RENDER':
                 if (!renderer) throw new Error("Renderer not initialized");
 
@@ -62,24 +80,25 @@ ctx.onmessage = async (e: MessageEvent<WorkerMessage>) => {
 
                 const startTime = performance.now();
 
-                // Process frame
-                // We need to handle ImageBitmap or ArrayBuffer.
-                // The WASM signature likely expects Uint8Array (Clamped).
+                // Determine which image data to use
                 let data: Uint8Array;
-                if (imageData instanceof ImageBitmap) {
-                    // If it's an ImageBitmap, we might need to draw it to an OffscreenCanvas to get bytes,
-                    // OR the renderer supports ImageBitmap directly (unlikely for raw pixel manipulation unless webgl).
-                    // The previous worker used `imageData` which was likely a Uint8ClampedArray from ImageData.
-                    // Let's assume for now we get a buffer or we convert.
-                    // If we get ImageBitmap, we need to extract pixels.
-                    const osc = new OffscreenCanvas(width, height);
-                    const osCtx = osc.getContext('2d');
-                    if (!osCtx) throw new Error("Could not get OffscreenCanvas context");
-                    osCtx.drawImage(imageData, 0, 0);
-                    const id = osCtx.getImageData(0, 0, width, height);
-                    data = new Uint8Array(id.data.buffer);
+                if (imageData) {
+                    // Use provided image data (stateless mode)
+                    if (imageData instanceof ImageBitmap) {
+                        const osc = new OffscreenCanvas(width, height);
+                        const osCtx = osc.getContext('2d');
+                        if (!osCtx) throw new Error("Could not get OffscreenCanvas context");
+                        osCtx.drawImage(imageData, 0, 0);
+                        const id = osCtx.getImageData(0, 0, width, height);
+                        data = new Uint8Array(id.data.buffer);
+                    } else {
+                        data = new Uint8Array(imageData as ArrayBuffer);
+                    }
+                } else if (sourceImage) {
+                    // Use stored image data (stateful mode)
+                    data = sourceImage;
                 } else {
-                    data = new Uint8Array(imageData as ArrayBuffer);
+                    throw new Error("No image data provided and no source image set");
                 }
 
                 const result = await renderer.process_frame(data, width, height, adjustments);

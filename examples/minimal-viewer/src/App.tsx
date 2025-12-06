@@ -79,9 +79,14 @@ function App() {
 
   // Load default image
   useEffect(() => {
+    // Only load image if backend is ready (client initialized)
+    // Actually, client is created in first useEffect, but initBackend runs async.
+    // We should wait for 'currentBackend' to be valid (not 'initializing...' or 'Error').
+    if (currentBackend === 'initializing...' || currentBackend === 'Error') return;
+
     const img = new Image();
     img.src = '/sample.jpg';
-    img.onload = () => {
+    img.onload = async () => {
       setImage(img);
       const canvas = document.createElement('canvas');
       canvas.width = img.width;
@@ -90,14 +95,25 @@ function App() {
       if (ctx) {
         ctx.drawImage(img, 0, 0);
         const data = ctx.getImageData(0, 0, img.width, img.height).data;
-        setImageData(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+        const buffer = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        setImageData(buffer);
+
         if (canvasRef.current) {
           canvasRef.current.width = img.width;
           canvasRef.current.height = img.height;
         }
+
+        // Send image to worker immediately
+        if (clientRef.current) {
+          console.log("App: Sending image to worker...");
+          // We need to copy because setImage transfers ownership
+          const bufferCopy = buffer.slice();
+          await clientRef.current.setImage(bufferCopy.buffer, img.width, img.height);
+          console.log("App: Image sent to worker");
+        }
       }
     };
-  }, []);
+  }, [currentBackend]); // Add currentBackend dependency
 
   // Render Loop
   useEffect(() => {
@@ -122,14 +138,9 @@ function App() {
           canvasRef.current!.height = image.height;
         }
 
-        // We need to clone the imageData because it's transferable and will be neutered?
-        // Yes, if we transfer it, we lose it.
-        // We should keep a master copy and clone it for the worker.
-        // `imageData` is Uint8Array. `imageData.slice()` creates a copy.
-        const dataCopy = imageData.slice();
-
+        // Stateful render: Pass null for imageData
         const res = await clientRef.current!.render(
-          dataCopy.buffer,
+          null,
           image.width,
           image.height,
           settings
@@ -208,7 +219,7 @@ function App() {
           <input type="range" min="0" max="1" step="0.05" value={grainAmount} onChange={e => setGrainAmount(parseFloat(e.target.value))} />
 
           <label>Size: {grainSize}</label>
-          <select value={grainSize} onChange={e => setGrainSize(e.target.value)}>
+          <select value={grainSize} onChange={e => setGrainSize(e.target.value as 'fine' | 'medium' | 'coarse')}>
             <option value="fine">Fine</option>
             <option value="medium">Medium</option>
             <option value="coarse">Coarse</option>

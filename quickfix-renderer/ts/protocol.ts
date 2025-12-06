@@ -5,7 +5,8 @@ import { RendererOptions, QuickFixAdjustments } from '../pkg/quickfix_renderer';
  */
 export type WorkerMessage =
     | { type: 'INIT'; payload: { rendererOptions: RendererOptions } }
-    | { type: 'RENDER'; payload: { imageData: ImageBitmap | ArrayBuffer; width: number; height: number; adjustments: QuickFixAdjustments; requestId: number } }
+    | { type: 'SET_IMAGE'; payload: { imageData: ImageBitmap | ArrayBuffer; width: number; height: number } }
+    | { type: 'RENDER'; payload: { imageData?: ImageBitmap | ArrayBuffer; width: number; height: number; adjustments: QuickFixAdjustments; requestId: number } }
     | { type: 'CANCEL'; payload: { requestId: number } }
     | { type: 'DISPOSE' };
 

@@ -76,15 +76,38 @@ export class QuickFixClient {
     }
 
     /**
+     * Sets the source image for subsequent render calls.
+     * This allows for stateful rendering without re-transferring the image data.
+     * @param imageData - The input image data.
+     * @param width - Image width.
+     * @param height - Image height.
+     */
+    async setImage(imageData: ImageBitmap | ArrayBuffer, width: number, height: number): Promise<void> {
+        // Transfer buffer if it's an ArrayBuffer
+        const transfer: Transferable[] = [];
+        if (imageData instanceof ArrayBuffer) {
+            transfer.push(imageData);
+        }
+        if (imageData instanceof ImageBitmap) {
+            transfer.push(imageData);
+        }
+
+        this.worker.postMessage({
+            type: 'SET_IMAGE',
+            payload: { imageData, width, height }
+        } as WorkerMessage, transfer);
+    }
+
+    /**
      * Sends a render request to the worker.
-     * @param imageData - The input image data (ImageBitmap or ArrayBuffer).
+     * @param imageData - The input image data (optional if setImage was called).
      * @param width - Image width.
      * @param height - Image height.
      * @param adjustments - The adjustments to apply.
      * @returns A promise resolving to the processed image data.
      */
     render(
-        imageData: ImageBitmap | ArrayBuffer,
+        imageData: ImageBitmap | ArrayBuffer | null,
         width: number,
         height: number,
         adjustments: QuickFixAdjustments
@@ -106,7 +129,7 @@ export class QuickFixClient {
 
             this.worker.postMessage({
                 type: 'RENDER',
-                payload: { requestId, imageData, width, height, adjustments }
+                payload: { requestId, imageData: imageData || undefined, width, height, adjustments }
             } as WorkerMessage, transfer);
         });
     }
