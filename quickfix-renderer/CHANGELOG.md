@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/JoMe92/chroma-lab/compare/v0.2.0...v0.2.1) (2025-12-06)
+
+
+### Bug Fixes
+
+* force release for public launch ([9147050](https://github.com/JoMe92/chroma-lab/commit/91470506f2cdbc97c0044d50cf36b96ac20fd5c9))
+
 ## [0.2.0](https://github.com/JoMe92/chroma-lab/compare/v0.1.0...v0.2.0) (2025-12-06)
 
 
