@@ -13,6 +13,7 @@ test = "cargo test"
 lint = { cmd = "cargo fmt --check && cargo clippy --target wasm32-unknown-unknown -- -D warnings", depends-on = ["install"] }
 build = "pnpm run build"
 install = "pnpm install"
+docs = { cmd = "cargo doc --no-deps --open && pnpm run docs", depends-on = ["install"] }
 
 [dependencies]
 rust = ">=1.75"

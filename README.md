@@ -44,6 +44,21 @@ A standalone Rust/WASM renderer for image adjustments (Geometry, Crop, Rotate, E
 See [Web Worker Architecture](docs/web-worker-architecture.md) for a deep dive into the worker integration.
 See [Renderer Integration Guide](docs/renderer-integration.md) for detailed integration steps and data flow diagrams.
 
+## API Documentation
+
+Automated API documentation can be generated for both the Rust crate and the TypeScript client.
+
+### Rust Docs
+```bash
+cargo doc --open
+```
+
+### TypeScript Docs
+```bash
+pnpm run docs
+```
+The documentation will be generated in `docs/ts`.
+
 ## Feature Flags
 
 - `cpu` (default): Deterministic CPU-based rendering.
