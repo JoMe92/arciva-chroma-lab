@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/JoMe92/chroma-lab/compare/v0.2.0...v0.2.1) (2025-12-06)
+
+
+### Bug Fixes
+
+* **quickfix-renderer:** correct relative import paths in worker build ([c7baaac](https://github.com/JoMe92/chroma-lab/commit/c7baaacd7df9164e00853fa1c49df3f86b177382))
+* **renderer:** fix worker import path by resolving build errors ([9f0517c](https://github.com/JoMe92/chroma-lab/commit/9f0517c9b7973c05d896b1cd0a16b8fceb670127))
+
 ## [0.2.0](https://github.com/JoMe92/chroma-lab/compare/v0.1.0...v0.2.0) (2025-12-06)
 
 ### Features
