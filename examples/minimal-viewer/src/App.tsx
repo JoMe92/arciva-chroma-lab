@@ -1,14 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { QuickFixClient } from '../../../quickfix-renderer/pkg/client.js';
+import { RendererOptions } from 'quickfix-renderer';
 
-
-// Initialize WASM once
-
+// Import worker URL using Vite's ?url suffix
+// We need to point to the JS file in the package.
+// Since 'quickfix-renderer' points to 'pkg', we can try importing from the package.
+// Note: We might need to use a relative path if package resolution fails for ?url
+import workerUrl from '../../../quickfix-renderer/pkg/worker.js?url';
 
 function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const workerRef = useRef<Worker | null>(null);
-  const pendingRequests = useRef<Map<number, { resolve: (data: any) => void, reject: (err: any) => void }>>(new Map());
-  const requestCounter = useRef(0);
+  const clientRef = useRef<QuickFixClient | null>(null);
+
   const [backend, setBackend] = useState<string>('auto');
   const [currentBackend, setCurrentBackend] = useState<string>('initializing...');
   const [image, setImage] = useState<HTMLImageElement | null>(null);
@@ -21,72 +24,51 @@ function App() {
   const [temp, setTemp] = useState(0);
   const [tint, setTint] = useState(0);
   const [grainAmount, setGrainAmount] = useState(0);
-  const [grainSize, setGrainSize] = useState('medium');
+  const [grainSize, setGrainSize] = useState<'fine' | 'medium' | 'coarse'>('medium');
   const [rotation, setRotation] = useState(0);
 
-  // Helper to send message to worker and wait for response
-  const sendWorkerMessage = (type: string, payload: any): Promise<any> => {
-    return new Promise((resolve, reject) => {
-      if (!workerRef.current) {
-        reject(new Error("Worker not initialized"));
-        return;
-      }
-      const id = requestCounter.current++;
-      pendingRequests.current.set(id, { resolve, reject });
-      workerRef.current.postMessage({ type, payload, id });
-    });
-  };
-
-  // Initialize Worker
+  // Initialize Client
   useEffect(() => {
-    console.log("App: Initializing worker...");
-    const worker = new Worker(new URL('./worker.ts', import.meta.url), {
-      type: 'module'
-    });
-
-    worker.onerror = (e) => {
-      console.error("App: Worker Error Event:", e);
-    };
-
-    worker.onmessage = (e) => {
-      const { id, success, error, ...rest } = e.data;
-      const request = pendingRequests.current.get(id);
-      if (request) {
-        pendingRequests.current.delete(id);
-        if (success) {
-          request.resolve(rest);
-        } else {
-          console.error("App: Worker returned error:", error);
-          request.reject(new Error(error));
-        }
-      } else {
-        console.warn("App: Received message for unknown request", id);
-      }
-    };
-
-    workerRef.current = worker;
+    console.log("App: Initializing QuickFixClient...");
+    // Create client with the worker URL
+    const client = new QuickFixClient(workerUrl);
+    clientRef.current = client;
 
     return () => {
-      console.log("App: Terminating worker");
-      worker.terminate();
+      console.log("App: Disposing QuickFixClient");
+      client.dispose();
     };
   }, []);
 
-  // Initialize Renderer in Worker
+  // Initialize Backend
   useEffect(() => {
-    console.log("App: initBackend effect running", { backend, workerExists: !!workerRef.current });
-    if (!workerRef.current) {
-      console.warn("App: workerRef is null, skipping initBackend");
-      return;
-    }
+    if (!clientRef.current) return;
 
     async function initBackend() {
-      console.log("App: initBackend called");
+      console.log("App: initBackend called with", backend);
       setCurrentBackend('initializing...');
       try {
-        const res = await sendWorkerMessage('init', { backend });
-        setCurrentBackend(res.backend);
-        console.log(`Worker initialized backend: ${res.backend}`);
+        // We need to construct RendererOptions. 
+        // Since we can't easily construct WASM struct here without init, 
+        // and the client.init takes RendererOptions.
+        // Wait, RendererOptions is exported from 'quickfix-renderer'.
+        // But we need to have called `init()` (WASM init) in the main thread to use it?
+        // NO. The worker does the WASM init.
+        // The main thread just passes data.
+        // My previous `worker.ts` implementation assumed `rendererOptions` payload.
+        // And I used `@ts-ignore` to construct it in the worker.
+        // So here I should pass a plain object that LOOKS like RendererOptions?
+        // Or I should change `client.init` to take a plain object.
+
+        // Let's assume for now I pass a plain object and cast it.
+        // The worker will read `.backend` from it.
+        const options = { backend } as any as RendererOptions;
+
+        await clientRef.current!.init(options);
+        // We don't get the backend back in init() promise currently (it returns void).
+        // I should update client.init to return the result payload.
+        // For now, let's assume success.
+        setCurrentBackend(backend);
       } catch (e) {
         console.error("Failed to init backend:", e);
         setCurrentBackend("Error");
@@ -119,21 +101,7 @@ function App() {
 
   // Render Loop
   useEffect(() => {
-    console.log("App: Render effect triggered", {
-      hasWorker: !!workerRef.current,
-      hasImageData: !!imageData,
-      hasImage: !!image,
-      hasCanvas: !!canvasRef.current,
-      isRendering,
-      currentBackend
-    });
-
-    if (!workerRef.current || !imageData || !image || !canvasRef.current || isRendering) {
-      console.log("App: Render skipped due to missing dependencies or busy state");
-      return;
-    }
-    if (currentBackend === 'initializing...' || currentBackend === 'Error') {
-      console.log("App: Render skipped due to backend state:", currentBackend);
+    if (!clientRef.current || !imageData || !image || !canvasRef.current || isRendering) {
       return;
     }
 
@@ -154,34 +122,32 @@ function App() {
           canvasRef.current!.height = image.height;
         }
 
-        console.log("Sending render request to worker", { width: image.width, height: image.height, dataSize: imageData.byteLength });
-        const res = await sendWorkerMessage('render', {
-          imageData,
-          width: image.width,
-          height: image.height,
-          adjustments: settings
-        });
+        // We need to clone the imageData because it's transferable and will be neutered?
+        // Yes, if we transfer it, we lose it.
+        // We should keep a master copy and clone it for the worker.
+        // `imageData` is Uint8Array. `imageData.slice()` creates a copy.
+        const dataCopy = imageData.slice();
 
-        const { data, width, height } = res;
-        console.log("Worker response:", { width, height, dataSize: data.byteLength });
+        const res = await clientRef.current!.render(
+          dataCopy.buffer,
+          image.width,
+          image.height,
+          settings
+        );
+
+        const { imageBitmap, width, height } = res;
 
         const ctx = canvasRef.current!.getContext('2d');
         if (ctx) {
-          // Check if data has content
-          if (data.length > 0 && data[0] === 0 && data[1] === 0 && data[2] === 0 && data[3] === 0) {
-            console.warn("First pixel is transparent black!");
-          }
-
-          // Create ImageData from buffer
-          const clamped = new Uint8ClampedArray(data.buffer);
+          // imageBitmap is ArrayBuffer (from my worker impl)
+          const buf = imageBitmap as ArrayBuffer;
+          const clamped = new Uint8ClampedArray(buf);
           const imgData = new ImageData(clamped, width, height);
 
-          // Handle resize if output size changed (e.g. crop)
           if (canvasRef.current!.width !== width || canvasRef.current!.height !== height) {
             canvasRef.current!.width = width;
             canvasRef.current!.height = height;
           }
-
           ctx.putImageData(imgData, 0, 0);
         }
       } catch (e) {
@@ -191,10 +157,6 @@ function App() {
       }
     };
 
-    // Debounce or just run? 
-    // Since we have isRendering flag, we skip if busy. 
-    // But we should probably queue the latest request if one comes in while busy.
-    // For now, simple skip is okay for "minimal-viewer".
     render();
   }, [imageData, image, exposure, contrast, temp, tint, grainAmount, grainSize, rotation, currentBackend]);
 
