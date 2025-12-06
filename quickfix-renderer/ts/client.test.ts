@@ -3,13 +3,18 @@ import { QuickFixClient } from './client';
 import { RendererOptions, QuickFixAdjustments } from '../pkg/quickfix_renderer';
 
 // Mock the Worker API globally
-class MockWorker {
+class MockWorker implements Partial<Worker> {
     onmessage: ((this: Worker, ev: MessageEvent) => any) | null = null;
-    postMessage(message: any, transfer?: Transferable[]) {
+    postMessage(message: any, transferOrOptions?: any) {
         // Echo back messages or handle specific logical mocks
         this.handleMessage(message);
     }
     terminate() { }
+    addEventListener(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions): void { }
+    removeEventListener(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions): void { }
+    dispatchEvent(event: Event): boolean { return true; }
+    onerror: ((this: AbstractWorker, ev: ErrorEvent) => any) | null = null;
+    onmessageerror: ((this: Worker, ev: MessageEvent) => any) | null = null;
 
     // Helper to simulate messages coming back from the worker
     emitMessage(data: any) {
@@ -69,9 +74,7 @@ vi.mock('../pkg/quickfix_renderer', () => {
                 this.preferred_backend = backend;
             }
         },
-        QuickFixAdjustments: class {
-            static default() { return new QuickFixAdjustments(); }
-        }
+        // QuickFixAdjustments is an interface, so no runtime mock needed
     };
 });
 
@@ -92,7 +95,7 @@ describe('QuickFixClient', () => {
 
     it('processes a render request', async () => {
         await client.init(new RendererOptions());
-        const adjustments = new QuickFixAdjustments();
+        const adjustments: QuickFixAdjustments = {};
         const result = await client.render(new ArrayBuffer(100), 10, 10, adjustments);
 
         expect(result).toBeDefined();
@@ -103,7 +106,7 @@ describe('QuickFixClient', () => {
 
     it('handles multiple concurrent requests correctly', async () => {
         await client.init(new RendererOptions());
-        const adjustments = new QuickFixAdjustments();
+        const adjustments: QuickFixAdjustments = {};
 
         const p1 = client.render(null, 10, 10, adjustments);
         const p2 = client.render(null, 20, 20, adjustments);
