@@ -19,7 +19,7 @@ jobs:
     - name: Install Pixi
       uses: prefix-dev/setup-pixi@v0.8.1
       with:
-        pixi-version: v0.18.0
+
         cache: true
 
     - name: Lint
