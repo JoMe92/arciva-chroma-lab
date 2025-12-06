@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/JoMe92/chroma-lab/compare/v0.1.0...v0.2.0) (2025-12-06)
+
+
+### Features
+
+* add repository URL to quickfix-renderer and enable manual publish workflow dispatch ([9515186](https://github.com/JoMe92/chroma-lab/commit/9515186430e37de0d534881ba32db9c600de9ecd))
+
 ## 0.1.0 (2025-12-06)
 
 
