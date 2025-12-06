@@ -1,0 +1,29 @@
+name: Publish Package
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Pixi
+        uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          cache: true
+          
+      - name: Build WASM
+        run: pixi run build
+        
+      - name: Publish to GitHub Packages
+        run: |
+          cd quickfix-renderer/pkg
+          echo "@JoMe92:registry=https://npm.pkg.github.com" > .npmrc
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
+          npm publish
