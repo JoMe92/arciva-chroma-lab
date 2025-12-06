@@ -7,14 +7,16 @@
     "dev": "pnpm -C examples/minimal-viewer dev",
     "build": "pnpm run build:wasm && pnpm run build:ts && pnpm -C examples/minimal-viewer install && pnpm run build:bundle",
     "build:wasm": "wasm-pack build --target web --out-dir pkg --scope JoMe92 quickfix-renderer && node scripts/update-pkg-json.cjs",
-    "build:ts": "tsc -p quickfix-renderer/ts/tsconfig.json",
+    "build:ts": "tsc -p quickfix-renderer/ts/tsconfig.json && node scripts/fix-imports.cjs",
     "build:bundle": "pnpm -C examples/minimal-viewer build",
-    "preview": "pnpm -C examples/minimal-viewer preview"
+    "preview": "pnpm -C examples/minimal-viewer preview",
+    "test": "vitest"
   },
   "devDependencies": {
     "typedoc": "^0.28.15",
     "typescript": "^5.0.0",
     "vite": "^5.0.0",
+    "vitest": "^4.0.15",
     "wasm-pack": "^0.12.1"
   }
 }
