@@ -42,6 +42,7 @@ A standalone Rust/WASM renderer for image adjustments (Geometry, Crop, Rotate, E
 - **`examples/minimal-viewer`**: React/Vite app demonstrating usage via Web Worker.
 
 See [Web Worker Architecture](docs/web-worker-architecture.md) for a deep dive into the worker integration.
+See [Renderer Integration Guide](docs/renderer-integration.md) for detailed integration steps and data flow diagrams.
 
 ## Feature Flags
 
