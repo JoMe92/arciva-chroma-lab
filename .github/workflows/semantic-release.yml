@@ -22,26 +22,26 @@ jobs:
           path: quickfix-renderer
 
       - uses: actions/checkout@v4
-        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.release.outputs.release_created || steps.release.outputs['quickfix-renderer--release_created'] || github.event_name == 'workflow_dispatch' }}
 
       - name: Install wasm-pack
-        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.release.outputs.release_created || steps.release.outputs['quickfix-renderer--release_created'] || github.event_name == 'workflow_dispatch' }}
         uses: jetli/wasm-pack-action@v0.4.0
         with:
           version: 'latest'
 
       - name: Install Pixi
-        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.release.outputs.release_created || steps.release.outputs['quickfix-renderer--release_created'] || github.event_name == 'workflow_dispatch' }}
         uses: prefix-dev/setup-pixi@v0.8.1
         with:
           cache: true
 
       - name: Build WASM
-        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.release.outputs.release_created || steps.release.outputs['quickfix-renderer--release_created'] || github.event_name == 'workflow_dispatch' }}
         run: pixi run build
 
       - name: Publish to GitHub Packages
-        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.release.outputs.release_created || steps.release.outputs['quickfix-renderer--release_created'] || github.event_name == 'workflow_dispatch' }}
         run: |
           cd quickfix-renderer/pkg
           echo "@JoMe92:registry=https://npm.pkg.github.com" > .npmrc
