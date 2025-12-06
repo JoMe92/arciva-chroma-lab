@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/JoMe92/chroma-lab/compare/v0.2.1...v0.2.2) (2025-12-06)
+
+
+### Bug Fixes
+
+* force release to apply package config ([7b54aca](https://github.com/JoMe92/chroma-lab/commit/7b54acaa86a403a1d287fd1dfc8b8422327e6712))
+
 ## [0.2.1](https://github.com/JoMe92/chroma-lab/compare/v0.2.0...v0.2.1) (2025-12-06)
 
 
