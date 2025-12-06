@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.2.2](https://github.com/JoMe92/chroma-lab/compare/v0.2.1...v0.2.2) (2025-12-06)
+
+
+### Bug Fixes
+
+* force release to apply package config ([7b54aca](https://github.com/JoMe92/chroma-lab/commit/7b54acaa86a403a1d287fd1dfc8b8422327e6712))
+
+## [0.2.1](https://github.com/JoMe92/chroma-lab/compare/v0.2.0...v0.2.1) (2025-12-06)
+
+
+### Bug Fixes
+
+* force release for public launch ([9147050](https://github.com/JoMe92/chroma-lab/commit/91470506f2cdbc97c0044d50cf36b96ac20fd5c9))
+
+## [0.2.0](https://github.com/JoMe92/chroma-lab/compare/v0.1.0...v0.2.0) (2025-12-06)
+
+
+### Features
+
+* add repository URL to quickfix-renderer and enable manual publish workflow dispatch ([9515186](https://github.com/JoMe92/chroma-lab/commit/9515186430e37de0d534881ba32db9c600de9ecd))
+
 ## 0.1.0 (2025-12-06)
 
 

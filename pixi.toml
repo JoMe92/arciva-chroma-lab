@@ -20,4 +20,5 @@ rust = ">=1.75"
 rust-std-wasm32-unknown-unknown = ">=1.75"
 nodejs = ">=20"
 pnpm = ">=8"
+binaryen = ">=116"
 

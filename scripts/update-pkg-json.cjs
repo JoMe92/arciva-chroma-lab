@@ -22,6 +22,11 @@ if (pkg.files) {
     });
 }
 
+// Add publishConfig for GitHub Packages
+pkg.publishConfig = {
+    "registry": "https://npm.pkg.github.com"
+};
+
 // Write back
 fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
 console.log('Updated package.json files list');
