@@ -41,6 +41,8 @@ A standalone Rust/WASM renderer for image adjustments (Geometry, Crop, Rotate, E
 - **`quickfix-renderer`**: Rust crate compiled to WASM.
 - **`examples/minimal-viewer`**: React/Vite app demonstrating usage via Web Worker.
 
+See [Web Worker Architecture](docs/web-worker-architecture.md) for a deep dive into the worker integration.
+
 ## Feature Flags
 
 - `cpu` (default): Deterministic CPU-based rendering.
