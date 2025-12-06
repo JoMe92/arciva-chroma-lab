@@ -1,5 +1,8 @@
 # Rust/WASM Quick Fix Renderer
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/JoMe92/chroma-lab/actions/workflows/quality-checks.yml/badge.svg)](https://github.com/JoMe92/chroma-lab/actions/workflows/quality-checks.yml)
+
 A standalone Rust/WASM renderer for image adjustments (Geometry, Crop, Rotate, Exposure, Color, Grain).
 
 ## Prerequisites
@@ -49,14 +52,17 @@ See [Renderer Integration Guide](docs/renderer-integration.md) for detailed inte
 Automated API documentation can be generated for both the Rust crate and the TypeScript client.
 
 ### Rust Docs
+
 ```bash
 cargo doc --open
 ```
 
 ### TypeScript Docs
+
 ```bash
 pnpm run docs
 ```
+
 The documentation will be generated in `docs/ts`.
 
 ## Feature Flags
@@ -68,3 +74,7 @@ The documentation will be generated in `docs/ts`.
 ## License
 
 MIT
+
+## Contributing
+
+Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) for details on our code of conduct, and the process for submitting pull requests to us.
