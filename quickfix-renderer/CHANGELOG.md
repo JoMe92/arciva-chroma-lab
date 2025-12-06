@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/JoMe92/chroma-lab/compare/v0.1.0...v0.2.0) (2025-12-06)
+
+
+### Features
+
+* prepare repository for public release ([c043d56](https://github.com/JoMe92/chroma-lab/commit/c043d5634c0b225dd00f7fb68361877386528b50))
+
 ## [0.2.2](https://github.com/JoMe92/chroma-lab/compare/v0.2.1...v0.2.2) (2025-12-06)
 
 
