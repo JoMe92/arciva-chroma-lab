@@ -1,0 +1,20 @@
+{
+  "name": "quickfix-renderer-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "docs": "typedoc --out docs/ts --tsconfig quickfix-renderer/ts/tsconfig.json quickfix-renderer/ts/client.ts",
+    "dev": "pnpm -C examples/minimal-viewer dev",
+    "build": "pnpm run build:wasm && pnpm run build:ts && pnpm -C examples/minimal-viewer install && pnpm run build:bundle",
+    "build:wasm": "wasm-pack build --target web --out-dir pkg quickfix-renderer && node scripts/update-pkg-json.cjs",
+    "build:ts": "tsc -p quickfix-renderer/ts/tsconfig.json",
+    "build:bundle": "pnpm -C examples/minimal-viewer build",
+    "preview": "pnpm -C examples/minimal-viewer preview"
+  },
+  "devDependencies": {
+    "typedoc": "^0.28.15",
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0",
+    "wasm-pack": "^0.12.1"
+  }
+}

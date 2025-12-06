@@ -1,0 +1,50 @@
+[package]
+name = "quickfix-renderer"
+version = "0.2.0"
+edition = "2021"
+authors = ["Antigravity <antigravity@google.com>"]
+description = "Rust/WASM Quick Fix Renderer"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["cpu"]
+cpu = []
+webgl2 = []
+webgpu = []
+
+[dependencies]
+wasm-bindgen = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde-wasm-bindgen = "0.6"
+console_error_panic_hook = "0.1"
+image = { version = "0.24", default-features = false, features = ["png", "jpeg"] } # minimal features
+rand = "0.8"
+rand_chacha = "0.3"
+rand_distr = "0.4"
+getrandom = { version = "0.2", features = ["js"] }
+wgpu = { version = "0.19", default-features = false, features = ["webgl", "wgsl"] }
+futures = "0.3"
+glow = "0.13"
+wasm-bindgen-futures = "0.4"
+bytemuck = { version = "1.14", features = ["derive"] }
+js-sys = "0.3"
+thiserror = "1.0"
+async-trait = "0.1"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "console",
+    "HtmlCanvasElement",
+    "WebGl2RenderingContext",
+    "Window",
+    "Document",
+    "Element",
+    "CanvasRenderingContext2d",
+    "ImageData",
+    "OffscreenCanvas",
+]

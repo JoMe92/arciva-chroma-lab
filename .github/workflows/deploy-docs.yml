@@ -1,0 +1,54 @@
+name: Deploy Docs
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pixi
+        uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          pixi-version: v0.39.0
+          cache: true
+
+      - name: Build Docs
+        run: pixi run docs
+
+      - name: Prepare Pages
+        run: |
+          mkdir -p public
+          cp -r docs/ts public/ts
+          cp -r target/doc public/rust
+          # Create a simple index.html to link to both
+          echo '<html><head><title>Quick Fix Renderer Docs</title></head><body><h1>Quick Fix Renderer Documentation</h1><ul><li><a href="ts/index.html">TypeScript Client Docs</a></li><li><a href="rust/quickfix_renderer/index.html">Rust Crate Docs</a></li></ul></body></html>' > public/index.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './public'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,3 @@
+[workspace]
+members = ["quickfix-renderer"]
+resolver = "2"
