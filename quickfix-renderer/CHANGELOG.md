@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/JoMe92/chroma-lab/compare/v0.2.2...v0.2.3) (2025-12-06)
+
+
+### Bug Fixes
+
+* verify release workflow with component output check ([4f6b8be](https://github.com/JoMe92/chroma-lab/commit/4f6b8be5dd81e6e2075c0e1725daa3731105f8cf))
+
 ## [0.2.2](https://github.com/JoMe92/chroma-lab/compare/v0.2.1...v0.2.2) (2025-12-06)
 
 
