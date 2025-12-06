@@ -1,0 +1,23 @@
+name: Code Coverage
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Pixi
+        uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          cache: true
+          
+      - name: Install Tarpaulin
+        run: cargo install cargo-tarpaulin
+        
+      - name: Generate Coverage
+        run: cargo tarpaulin --verbose --workspace --timeout 120 --out Xml
