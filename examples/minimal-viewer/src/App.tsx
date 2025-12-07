@@ -21,11 +21,35 @@ function App() {
   // Settings
   const [exposure, setExposure] = useState(0);
   const [contrast, setContrast] = useState(1);
+  const [highlights, setHighlights] = useState(0); // New
+  const [shadows, setShadows] = useState(0); // New
   const [temp, setTemp] = useState(0);
   const [tint, setTint] = useState(0);
   const [grainAmount, setGrainAmount] = useState(0);
   const [grainSize, setGrainSize] = useState<'fine' | 'medium' | 'coarse'>('medium');
   const [rotation, setRotation] = useState(0);
+  // Geometry Settings
+  const [geoVertical, setGeoVertical] = useState(0); // New
+  const [geoHorizontal, setGeoHorizontal] = useState(0); // New
+
+  // Crop State
+  // Draft state (what the sliders control)
+  const [cropX, setCropX] = useState(0.0);
+  const [cropY, setCropY] = useState(0.0);
+  const [cropW, setCropW] = useState(1.0);
+  const [cropH, setCropH] = useState(1.0);
+  // Applied state (what is sent to backend)
+  const [appliedCrop, setAppliedCrop] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
+
+  const applyCrop = () => {
+    setAppliedCrop({ x: cropX, y: cropY, width: cropW, height: cropH });
+  };
+
+  const resetCrop = () => {
+    setAppliedCrop(null);
+  };
+
+
 
   // Initialize Client
   useEffect(() => {
@@ -123,12 +147,16 @@ function App() {
 
     const render = async () => {
       setIsRendering(true);
-      const settings = {
-        exposure: { exposure, contrast },
+      const settings: any = { // Use any for now as TS types might not be updated in editor yet
+        exposure: { exposure, contrast, highlights, shadows },
         color: { temperature: temp, tint },
         grain: { amount: grainAmount, size: grainSize },
-        crop: { rotation },
-        geometry: { vertical: 0, horizontal: 0 }
+        crop: {
+          rotation,
+          // Only send rect if it is APPLIED. Otherwise send undefined (full image).
+          rect: appliedCrop ? appliedCrop : undefined
+        },
+        geometry: { vertical: geoVertical, horizontal: geoHorizontal }
       };
 
       try {
@@ -137,6 +165,8 @@ function App() {
           canvasRef.current!.width = image.width;
           canvasRef.current!.height = image.height;
         }
+
+        console.log("App: Rendering with settings:", JSON.stringify(settings, null, 2));
 
         // Stateful render: Pass null for imageData
         const res = await clientRef.current!.render(
@@ -150,7 +180,7 @@ function App() {
 
         const ctx = canvasRef.current!.getContext('2d');
         if (ctx) {
-          // imageBitmap is ArrayBuffer (from my worker impl)
+          // 1. Put the rendered image (Cropped or Full)
           const buf = imageBitmap as ArrayBuffer;
           const clamped = new Uint8ClampedArray(buf);
           const imgData = new ImageData(clamped, width, height);
@@ -160,6 +190,29 @@ function App() {
             canvasRef.current!.height = height;
           }
           ctx.putImageData(imgData, 0, 0);
+
+          // 2. If NOT applied, draw the Overlay on top of the Full Image
+          if (!appliedCrop) {
+            const x = Math.round(cropX * width);
+            const y = Math.round(cropY * height);
+            const w = Math.round(cropW * width);
+            const h = Math.round(cropH * height);
+
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y, w, h);
+
+            // Semi-transparent fill outside
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            // Top
+            ctx.fillRect(0, 0, width, y);
+            // Bottom
+            ctx.fillRect(0, y + h, width, height - (y + h));
+            // Left
+            ctx.fillRect(0, y, x, h);
+            // Right
+            ctx.fillRect(x + w, y, width - (x + w), h);
+          }
         }
       } catch (e) {
         console.error("Render failed:", e);
@@ -169,7 +222,7 @@ function App() {
     };
 
     render();
-  }, [imageData, image, exposure, contrast, temp, tint, grainAmount, grainSize, rotation, currentBackend]);
+  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, currentBackend]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
@@ -185,6 +238,8 @@ function App() {
         </select>
         <span> Current: {currentBackend}</span>
       </div>
+
+
 
       <div style={{ display: 'flex', gap: '1rem' }}>
         <canvas
@@ -207,6 +262,12 @@ function App() {
           <label>Contrast: {contrast}</label>
           <input type="range" min="0.5" max="1.5" step="0.05" value={contrast} onChange={e => setContrast(parseFloat(e.target.value))} />
 
+          <label>Highlights: {highlights}</label>
+          <input type="range" min="-1" max="1" step="0.1" value={highlights} onChange={e => setHighlights(parseFloat(e.target.value))} />
+
+          <label>Shadows: {shadows}</label>
+          <input type="range" min="-1" max="1" step="0.1" value={shadows} onChange={e => setShadows(parseFloat(e.target.value))} />
+
           <h3>Color</h3>
           <label>Temp: {temp}</label>
           <input type="range" min="-1" max="1" step="0.05" value={temp} onChange={e => setTemp(parseFloat(e.target.value))} />
@@ -228,6 +289,46 @@ function App() {
           <h3>Geometry</h3>
           <label>Rotation: {rotation}</label>
           <input type="range" min="-45" max="45" step="1" value={rotation} onChange={e => setRotation(parseFloat(e.target.value))} />
+
+          <label>Vertical Skew: {geoVertical}</label>
+          <input type="range" min="-0.5" max="0.5" step="0.05" value={geoVertical} onChange={e => setGeoVertical(parseFloat(e.target.value))} />
+
+          <label>Horizontal Skew: {geoHorizontal}</label>
+          <input type="range" min="-0.5" max="0.5" step="0.05" value={geoHorizontal} onChange={e => setGeoHorizontal(parseFloat(e.target.value))} />
+
+          <h3>Crop</h3>
+          <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+            <button onClick={applyCrop} disabled={!!appliedCrop}>Apply Crop</button>
+            <button onClick={resetCrop} disabled={!appliedCrop}>Reset Crop</button>
+          </div>
+
+          {!appliedCrop ? (
+            <>
+              <p style={{ fontSize: '0.8rem', color: '#666' }}>Adjust sliders to position crop box (Red).</p>
+              <label>X: {cropX.toFixed(2)}</label>
+              <input type="range" min="0" max="1" step="0.01" value={cropX} onChange={e => setCropX(parseFloat(e.target.value))} />
+              <label>Y: {cropY.toFixed(2)}</label>
+              <input type="range" min="0" max="1" step="0.01" value={cropY} onChange={e => setCropY(parseFloat(e.target.value))} />
+              <label>Width: {cropW.toFixed(2)}</label>
+              <input type="range" min="0" max="1" step="0.01" value={cropW} onChange={e => setCropW(parseFloat(e.target.value))} />
+              <label>Height: {cropH.toFixed(2)}</label>
+              <input type="range" min="0" max="1" step="0.01" value={cropH} onChange={e => setCropH(parseFloat(e.target.value))} />
+            </>
+          ) : (
+            <div>
+              <p>Crop Applied. Click Reset to adjust.</p>
+              <pre style={{ fontSize: '0.7em', background: '#eee', padding: '5px' }}>
+                {JSON.stringify(appliedCrop, null, 2)}
+              </pre>
+            </div>
+          )}
+
+          <div style={{ marginTop: '1rem', borderTop: '1px solid #eee', paddingTop: '0.5rem' }}>
+            <h4>Debug Info</h4>
+            <div>Backend: {currentBackend}</div>
+            <div>Canvas Size: {canvasRef.current ? `${canvasRef.current.width}x${canvasRef.current.height}` : 'N/A'}</div>
+            <div>Image Size: {image ? `${image.width}x${image.height}` : 'N/A'}</div>
+          </div>
         </div>
       </div>
     </div>
