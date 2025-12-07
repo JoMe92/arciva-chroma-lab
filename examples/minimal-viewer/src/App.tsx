@@ -185,14 +185,45 @@ function App() {
           const clamped = new Uint8ClampedArray(buf);
           const imgData = new ImageData(clamped, width, height);
 
-          if (canvasRef.current!.width !== width || canvasRef.current!.height !== height) {
-            canvasRef.current!.width = width;
-            canvasRef.current!.height = height;
-          }
-          ctx.putImageData(imgData, 0, 0);
+          if (appliedCrop) {
+            // CROP MODE: Draw only the selected region
+            const cropX = Math.round(appliedCrop.x * width);
+            const cropY = Math.round(appliedCrop.y * height);
+            const cropW = Math.round(appliedCrop.width * width);
+            const cropH = Math.round(appliedCrop.height * height);
 
-          // 2. If NOT applied, draw the Overlay on top of the Full Image
-          if (!appliedCrop) {
+            // Clamp bounds
+            const safeX = Math.max(0, cropX);
+            const safeY = Math.max(0, cropY);
+            // Ensure width/height don't exceed image bounds
+            const safeW = Math.min(width - safeX, cropW);
+            const safeH = Math.min(height - safeY, cropH);
+
+            if (safeW > 0 && safeH > 0) {
+              // Resize canvas to CROP dimensions
+              if (canvasRef.current!.width !== safeW || canvasRef.current!.height !== safeH) {
+                canvasRef.current!.width = safeW;
+                canvasRef.current!.height = safeH;
+              }
+
+              // Create cropped bitmap
+              createImageBitmap(imgData, safeX, safeY, safeW, safeH).then(bitmap => {
+                ctx.drawImage(bitmap, 0, 0);
+                bitmap.close();
+              }).catch(err => {
+                console.error("Failed to create crop bitmap:", err);
+              });
+            }
+
+          } else {
+            // FULL MODE: Draw full image + Overlay
+            if (canvasRef.current!.width !== width || canvasRef.current!.height !== height) {
+              canvasRef.current!.width = width;
+              canvasRef.current!.height = height;
+            }
+            ctx.putImageData(imgData, 0, 0);
+
+            // Overlay on top
             const x = Math.round(cropX * width);
             const y = Math.round(cropY * height);
             const w = Math.round(cropW * width);
