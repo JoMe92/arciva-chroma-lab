@@ -359,12 +359,12 @@ function App() {
             Auto Crop (Straighten)
           </label>
 
-          <label>Vertical Skew: {geoVertical}</label>
-          <input type="range" min="-0.5" max="0.5" step="0.05" value={geoVertical} onChange={e => setGeoVertical(parseFloat(e.target.value))} />
+          <label>Vertical Perspective: {geoVertical}</label>
+          <input type="range" min="-1" max="1" step="0.05" value={geoVertical} onChange={e => setGeoVertical(parseFloat(e.target.value))} />
 
 
-          <label>Horizontal Skew: {geoHorizontal}</label>
-          <input type="range" min="-0.5" max="0.5" step="0.05" value={geoHorizontal} onChange={e => setGeoHorizontal(parseFloat(e.target.value))} />
+          <label>Horizontal Perspective: {geoHorizontal}</label>
+          <input type="range" min="-1" max="1" step="0.05" value={geoHorizontal} onChange={e => setGeoHorizontal(parseFloat(e.target.value))} />
 
           <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
