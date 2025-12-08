@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 pub mod api_types;
+pub mod geometry;
 pub mod operations;
 pub mod renderer;
 pub mod shaders;
@@ -25,6 +26,27 @@ pub struct CropRect {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+}
+
+#[wasm_bindgen]
+pub fn get_opaque_crop(rotation_deg: f32, width: f32, height: f32) -> JsValue {
+    let rect = calculate_opaque_crop_rect(rotation_deg, width, height);
+    serde_wasm_bindgen::to_value(&rect).unwrap()
+}
+
+pub fn calculate_opaque_crop_rect(rotation_deg: f32, width: f32, height: f32) -> CropRect {
+    let rotation_rad = rotation_deg.to_radians();
+    let (new_w, new_h) = geometry::calculate_largest_interior_rect(width, height, rotation_rad);
+    
+    let nw = new_w / width;
+    let nh = new_h / height;
+    
+    CropRect {
+        x: (1.0 - nw) / 2.0,
+        y: (1.0 - nh) / 2.0,
+        width: nw,
+        height: nh,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -86,6 +108,8 @@ export interface CropRect {
     width: number;
     height: number;
 }
+
+export function get_opaque_crop(rotation_deg: number, width: number, height: number): CropRect;
 
 export interface CropSettings {
     rotation?: number;
@@ -399,5 +423,23 @@ mod tests {
         let adj = QuickFixAdjustments::default();
         let res = operations::process_frame_internal(&mut data, width, height, &adj);
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_get_opaque_crop_api() {
+        let crop = calculate_opaque_crop_rect(90.0, 100.0, 50.0);
+        
+        // 90 deg rotation of 100x50 fits into 50x100.
+        // Largest interior with ratio 2:1 inside 50x100.
+        // w = 50. h = 25.
+        // norm_w = 50/100 = 0.5.
+        // norm_h = 25/50 = 0.5.
+        // x = (1 - 0.5)/2 = 0.25.
+        // y = (1 - 0.5)/2 = 0.25.
+        
+        assert!((crop.width - 0.5).abs() < 1e-4);
+        assert!((crop.height - 0.5).abs() < 1e-4);
+        assert!((crop.x - 0.25).abs() < 1e-4);
+        assert!((crop.y - 0.25).abs() < 1e-4);
     }
 }
