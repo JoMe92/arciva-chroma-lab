@@ -27,6 +27,10 @@ pkg.publishConfig = {
     "registry": "https://npm.pkg.github.com"
 };
 
+// Add main and type for better compatibility
+pkg.main = "quickfix_renderer.js";
+pkg.type = "module";
+
 // Write back
 fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
 console.log('Updated package.json files list');

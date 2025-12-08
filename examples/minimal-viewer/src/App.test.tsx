@@ -3,15 +3,34 @@ import { describe, it, expect, vi } from 'vitest';
 import App from './App';
 
 // Mock the WASM module
-vi.mock('quickfix-renderer', () => {
+// Mock the worker URL
+vi.mock('../../../quickfix-renderer/pkg/worker.js?url', () => ({
+    default: 'mock-worker-url'
+}));
+
+// Mock the Client path
+vi.mock('../../../quickfix-renderer/pkg/client.js', () => {
     return {
-        default: vi.fn().mockResolvedValue({}),
-        QuickFixRenderer: class {
-            backend = 'cpu';
-            async render_to_canvas() { }
+        QuickFixClient: class {
+            constructor() { }
+            async init() { }
+            async setImage() { }
+            async render() {
+                return {
+                    imageBitmap: new ArrayBuffer(0),
+                    width: 100,
+                    height: 100
+                };
+            }
+            dispose() { }
         }
     };
 });
+
+// Mock the package import (for types or if referenced as value)
+vi.mock('quickfix-renderer', () => ({
+    RendererOptions: {}
+}));
 
 describe('App', () => {
     it('renders without crashing', () => {
