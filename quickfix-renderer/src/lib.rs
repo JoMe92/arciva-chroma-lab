@@ -19,12 +19,24 @@ pub fn init_panic_hook() {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CropSettings {
-    pub rotation: Option<f32>,
-    pub aspect_ratio: Option<f32>,
+#[serde(rename_all = "camelCase")]
+pub struct CropRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CropSettings {
+    pub rotation: Option<f32>,
+    pub aspect_ratio: Option<f32>,
+    pub rect: Option<CropRect>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ExposureSettings {
     pub exposure: Option<f32>,
     pub contrast: Option<f32>,
@@ -33,12 +45,14 @@ pub struct ExposureSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ColorSettings {
     pub temperature: Option<f32>,
     pub tint: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct GrainSettings {
     pub amount: f32,
     pub size: String, // "fine", "medium", "coarse"
@@ -46,12 +60,14 @@ pub struct GrainSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct GeometrySettings {
     pub vertical: Option<f32>,
     pub horizontal: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct QuickFixAdjustments {
     pub crop: Option<CropSettings>,
     pub exposure: Option<ExposureSettings>,
@@ -62,9 +78,17 @@ pub struct QuickFixAdjustments {
 
 #[wasm_bindgen(typescript_custom_section)]
 const TS_APPEND_CONTENT: &'static str = r#"
+export interface CropRect {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
 export interface CropSettings {
     rotation?: number;
     aspect_ratio?: number;
+    rect?: CropRect;
 }
 
 export interface ExposureSettings {
@@ -278,6 +302,17 @@ impl QuickFixRenderer {
         _options: Option<ProcessOptions>,
     ) -> Result<FrameResult, JsValue> {
         let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
+
+        // Debug Log
+        use web_sys::console;
+        console::log_1(
+            &format!(
+                "WASM: Processing frame. Crop rect: {:?}",
+                adjustments.crop.as_ref().and_then(|c| c.rect.as_ref())
+            )
+            .into(),
+        );
+
         let result = self
             .renderer
             .render(data, width, height, &adjustments)
