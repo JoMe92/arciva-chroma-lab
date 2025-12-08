@@ -443,9 +443,7 @@ fn apply_grain_in_place(img: &mut RgbaImage, settings: &GrainSettings) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        ColorSettings, CropRect, CropSettings, ExposureSettings, GeometrySettings,
-    };
+    use crate::{ColorSettings, CropRect, CropSettings, ExposureSettings, GeometrySettings};
 
     fn create_test_image(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {
         let mut img = RgbaImage::new(width, height);
@@ -572,7 +570,7 @@ mod tests {
         let left_px = res.get_pixel(0, 0);
         let right_px = res.get_pixel(width - 1, 0);
 
-        assert_eq!(left_px[0], 0);    // Blue component is at index 2, Red at 0
+        assert_eq!(left_px[0], 0); // Blue component is at index 2, Red at 0
         assert_eq!(left_px[2], 255);
         assert_eq!(right_px[0], 255);
         assert_eq!(right_px[2], 0);

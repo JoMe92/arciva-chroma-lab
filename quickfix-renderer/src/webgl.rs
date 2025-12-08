@@ -370,11 +370,29 @@ impl WebGlRenderer {
         );
         gl.uniform_1_f32(
             loc("u_flip_vertical").as_ref(),
-            if settings.geometry.as_ref().and_then(|g| g.flip_vertical).unwrap_or(false) { 1.0 } else { 0.0 },
+            if settings
+                .geometry
+                .as_ref()
+                .and_then(|g| g.flip_vertical)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
         );
         gl.uniform_1_f32(
             loc("u_flip_horizontal").as_ref(),
-            if settings.geometry.as_ref().and_then(|g| g.flip_horizontal).unwrap_or(false) { 1.0 } else { 0.0 },
+            if settings
+                .geometry
+                .as_ref()
+                .and_then(|g| g.flip_horizontal)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
         );
         gl.uniform_1_f32(
             loc("u_crop_rotation").as_ref(),

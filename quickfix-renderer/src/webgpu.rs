@@ -30,7 +30,7 @@ struct SettingsUniform {
     // _padding: [f32; 0],
     // Warning: Pod requires size to be valid. [f32; 0] is size 0.
     // Let's remove _padding if it's exact.
-    // But verify: 
+    // But verify:
     // geo_v, geo_h, flip_v, flip_h (4)
     // crop_rot, crop_asp, exp, cont (4)
     // high, shad, temp, tint (4)
@@ -328,8 +328,26 @@ impl Renderer for WebGpuRenderer {
                 .as_ref()
                 .and_then(|g| g.horizontal)
                 .unwrap_or(0.0),
-            flip_vertical: if settings.geometry.as_ref().and_then(|g| g.flip_vertical).unwrap_or(false) { 1.0 } else { 0.0 },
-            flip_horizontal: if settings.geometry.as_ref().and_then(|g| g.flip_horizontal).unwrap_or(false) { 1.0 } else { 0.0 },
+            flip_vertical: if settings
+                .geometry
+                .as_ref()
+                .and_then(|g| g.flip_vertical)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
+            flip_horizontal: if settings
+                .geometry
+                .as_ref()
+                .and_then(|g| g.flip_horizontal)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
             crop_rotation: settings
                 .crop
                 .as_ref()
@@ -622,8 +640,26 @@ impl Renderer for WebGpuRenderer {
                 .as_ref()
                 .and_then(|g| g.horizontal)
                 .unwrap_or(0.0),
-            flip_vertical: if settings.geometry.as_ref().and_then(|g| g.flip_vertical).unwrap_or(false) { 1.0 } else { 0.0 },
-            flip_horizontal: if settings.geometry.as_ref().and_then(|g| g.flip_horizontal).unwrap_or(false) { 1.0 } else { 0.0 },
+            flip_vertical: if settings
+                .geometry
+                .as_ref()
+                .and_then(|g| g.flip_vertical)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
+            flip_horizontal: if settings
+                .geometry
+                .as_ref()
+                .and_then(|g| g.flip_horizontal)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
             crop_rotation: settings
                 .crop
                 .as_ref()
