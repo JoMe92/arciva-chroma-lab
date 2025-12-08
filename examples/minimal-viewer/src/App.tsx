@@ -1,6 +1,42 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { QuickFixClient } from '../../../quickfix-renderer/pkg/client.js';
-import { RendererOptions, get_opaque_crop } from 'quickfix-renderer';
+import { RendererOptions } from 'quickfix-renderer';
+
+// Ported from geometry.rs to avoid WASM init on main thread
+function getOpaqueCrop(rotationDegrees: number, width: number, height: number) {
+  if (width <= 0 || height <= 0) return { x: 0, y: 0, width: 0, height: 0 };
+
+  const angleRad = Math.abs(rotationDegrees * Math.PI / 180.0);
+  if (angleRad < 1e-5) return { x: 0, y: 0, width: 1, height: 1 };
+
+  // Calculate largest interior rectangle
+  const sinA = Math.sin(angleRad);
+  const cosA = Math.cos(angleRad);
+
+  const num1 = width;
+  const den1 = width * cosA + height * sinA;
+
+  const num2 = height;
+  const den2 = width * sinA + height * cosA;
+
+  const k1 = num1 / den1;
+  const k2 = num2 / den2;
+
+  const k = Math.min(k1, k2);
+
+  const newW = width * k;
+  const newH = height * k;
+
+  const nw = newW / width;
+  const nh = newH / height;
+
+  return {
+    x: (1.0 - nw) / 2.0,
+    y: (1.0 - nh) / 2.0,
+    width: nw,
+    height: nh,
+  };
+}
 
 // Import worker URL using Vite's ?url suffix
 // We need to point to the JS file in the package.
@@ -56,7 +92,7 @@ function App() {
   useEffect(() => {
     if (autoCrop && image && Math.abs(rotation) > 0) {
       // Calculate opaque crop
-      const crop = get_opaque_crop(rotation, image.width, image.height);
+      const crop = getOpaqueCrop(rotation, image.width, image.height);
 
       // Update sliders
       setCropX(crop.x);
@@ -359,12 +395,12 @@ function App() {
             Auto Crop (Straighten)
           </label>
 
-          <label>Vertical Skew: {geoVertical}</label>
-          <input type="range" min="-0.5" max="0.5" step="0.05" value={geoVertical} onChange={e => setGeoVertical(parseFloat(e.target.value))} />
+          <label>Vertical Perspective: {geoVertical}</label>
+          <input type="range" min="-1" max="1" step="0.05" value={geoVertical} onChange={e => setGeoVertical(parseFloat(e.target.value))} />
 
 
-          <label>Horizontal Skew: {geoHorizontal}</label>
-          <input type="range" min="-0.5" max="0.5" step="0.05" value={geoHorizontal} onChange={e => setGeoHorizontal(parseFloat(e.target.value))} />
+          <label>Horizontal Perspective: {geoHorizontal}</label>
+          <input type="range" min="-1" max="1" step="0.05" value={geoHorizontal} onChange={e => setGeoHorizontal(parseFloat(e.target.value))} />
 
           <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

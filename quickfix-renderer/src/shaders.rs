@@ -8,10 +8,21 @@ struct VertexOutput {
 // Uniforms
 struct Settings {
     // Geometry
-    geo_vertical: f32,
-    geo_horizontal: f32,
-    // Flips
-    flip_vertical: f32,   // 0.0 or 1.0
+    homography_matrix: mat3x3<f32>,
+    geo_padding: f32, // Padding to align 16 bytes? mat3x3 takes 3 vec3s.
+    // WGSL struct layout rules: mat3x3<f32> is 3 columns of vec3.
+    // Each column is 16-byte aligned (vec3 is treated as vec4 size in uniform buffers usually).
+    // So 3 * 16 = 48 bytes.
+    // Next field starts at offset 48.
+    
+    // Flips - keep for now as they are applied separately or integrated? 
+    // Plan says "Geometry Settings already has vertical/horizontal".
+    // We passed them as 'v, h' floats before.
+    // Now we pass matrix.
+    // The matrix handles the Warp.
+    // Flips are usually independent?
+    // Let's keep flips separate for now.
+    flip_vertical: f32,
     flip_horizontal: f32, // 0.0 or 1.0
     
     // Crop/Rotate
@@ -155,46 +166,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // AND THEN flip it if needed.
     
     // 1. Geometry (Warp)
-    // Inverse mapping: find where current UV comes from in source
-    // Bilinear warp approximation
-    let v = clamp(settings.geo_vertical, -1.0, 1.0);
-    let h = clamp(settings.geo_horizontal, -1.0, 1.0);
+    // Homography Transform
+    // Map Output UV (0..1) to Source UV
+    // Homogenize UV: (u, v, 1)
     
-    if (abs(v) > 0.0001 || abs(h) > 0.0001) {
-        let max_x_offset = 0.25;
-        let max_y_offset = 0.25;
-        
-        let top_inset = v * max_x_offset;
-        let bottom_inset = -v * max_x_offset;
-        let left_y = h * max_y_offset;
-        let right_y = -h * max_y_offset;
-        
-        // Corners in UV space (0..1)
-        // We want to map the unit square UV to the distorted quad.
-        // Actually, we want the inverse: For a pixel in the output (unit square), where is it in the source?
-        // The source is the distorted quad? No, the source is the original image (unit square).
-        // The output is the distorted image.
-        // So we map Output UV -> Source UV.
-        // If we pull the top corners in (positive vertical), we are "zooming out" the top.
-        // So we need to sample a WIDER area of the source at the top.
-        // So Source UV range at top > 1.0?
-        // Wait, the Python implementation:
-        // "Calculate quad corners (source coordinates mapped to destination)"
-        // It maps Source (0..W, 0..H) to Destination Quad.
-        // Then it iterates Destination pixels and interpolates Source coordinates.
-        // So we do the same here.
-        // We interpolate the Source UVs based on current UV.
-        
-        let ul = vec2<f32>(0.0 + top_inset, 0.0 + left_y);
-        let ll = vec2<f32>(0.0 + bottom_inset, 1.0 - left_y); // 1.0 because UV y is 0..1
-        let lr = vec2<f32>(1.0 - bottom_inset, 1.0 - right_y);
-        let ur = vec2<f32>(1.0 - top_inset, 0.0 + right_y);
-        
-        // Bilinear interpolation of these corners based on current UV
-        // P(u,v) = mix(mix(ul, ur, u), mix(ll, lr, u), v)
-        let top = mix(ul, ur, uv.x);
-        let bottom = mix(ll, lr, uv.x);
-        uv = mix(top, bottom, uv.y);
+    let src_h = settings.homography_matrix * vec3<f32>(uv, 1.0);
+    
+    // Perspective Divide
+    if (abs(src_h.z) > 0.00001) {
+        uv = src_h.xy / src_h.z;
+    } else {
+        uv = src_h.xy;
     }
     
     // 2. Crop / Rotate
@@ -378,8 +360,7 @@ out vec4 out_color;
 uniform sampler2D u_texture;
 uniform sampler2D u_grain;
 
-uniform float u_geo_vertical;
-uniform float u_geo_horizontal;
+uniform mat3 u_homography_matrix;
 uniform float u_flip_vertical;
 uniform float u_flip_horizontal;
 uniform float u_crop_rotation;
@@ -439,26 +420,9 @@ void main() {
     vec2 uv = v_uv;
     
     // 1. Geometry (Warp)
-    float v = clamp(u_geo_vertical, -1.0, 1.0);
-    float h = clamp(u_geo_horizontal, -1.0, 1.0);
-    
-    if (abs(v) > 0.0001 || abs(h) > 0.0001) {
-        float max_x_offset = 0.25;
-        float max_y_offset = 0.25;
-        
-        float top_inset = v * max_x_offset;
-        float bottom_inset = -v * max_x_offset;
-        float left_y = h * max_y_offset;
-        float right_y = -h * max_y_offset;
-        
-        vec2 ul = vec2(0.0 + top_inset, 0.0 + left_y);
-        vec2 ll = vec2(0.0 + bottom_inset, 1.0 - left_y);
-        vec2 lr = vec2(1.0 - bottom_inset, 1.0 - right_y);
-        vec2 ur = vec2(1.0 - top_inset, 0.0 + right_y);
-        
-        vec2 top = mix(ul, ur, uv.x);
-        vec2 bottom = mix(ll, lr, uv.x);
-        uv = mix(top, bottom, uv.y);
+    vec3 src_h = u_homography_matrix * vec3(uv, 1.0);
+    if (abs(src_h.z) > 0.00001) {
+        uv = src_h.xy / src_h.z;
     }
 
     // Apply Flips

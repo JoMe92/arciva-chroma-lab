@@ -130,3 +130,194 @@ mod tests {
         assert!((w - 70.7106).abs() < 1e-3);
     }
 }
+
+/// Point struct for geometry calculations
+#[derive(Debug, Clone, Copy)]
+pub struct Point {
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Calculate the 4 corners of the source image that correspond to the output unit square
+/// based on the tilt settings.
+/// Returns [TopLeft, TopRight, BottomRight, BottomLeft]
+/// Coordinates are normalized 0..1 relative to the source image.
+pub fn calculate_distortion_state(vertical: f32, horizontal: f32) -> [Point; 4] {
+    let v = vertical.clamp(-1.0, 1.0);
+    let h = horizontal.clamp(-1.0, 1.0);
+
+    // Reuse logic from operations.rs but normalized
+    let max_offset = 0.25;
+
+    let top_inset = v * max_offset;
+    let bottom_inset = -v * max_offset;
+    let left_y = h * max_offset;
+    let right_y = -h * max_offset;
+
+    // TL
+    let ul = Point {
+        x: 0.0 + top_inset,
+        y: 0.0 + left_y,
+    };
+    // BL
+    let ll = Point {
+        x: 0.0 + bottom_inset,
+        y: 1.0 - left_y,
+    };
+    // BR
+    let lr = Point {
+        x: 1.0 - bottom_inset,
+        y: 1.0 - right_y,
+    };
+    // TR
+    let ur = Point {
+        x: 1.0 - top_inset,
+        y: 0.0 + right_y,
+    };
+
+    [ul, ur, lr, ll]
+}
+
+/// Calculate the 3x3 Homography Matrix that maps a point in the destination (unit square)
+/// to the source distorted quad.
+///
+/// Mapping:
+/// (0,0) -> corners[0] (TL)
+/// (1,0) -> corners[1] (TR)
+/// (1,1) -> corners[2] (BR)
+/// (0,1) -> corners[3] (BL)
+///
+/// Returns a flattened 3x3 matrix (row-major).
+pub fn calculate_homography_from_unit_square(corners: &[Point; 4]) -> [f32; 9] {
+    // Source points (Destination unit square)
+    // u, v
+    let src = [
+        Point { x: 0.0, y: 0.0 }, // TL
+        Point { x: 1.0, y: 0.0 }, // TR
+        Point { x: 1.0, y: 1.0 }, // BR
+        Point { x: 0.0, y: 1.0 }, // BL
+    ];
+
+    // Destination points (Source Quad) -> We map FROM output TO input
+    // x, y
+    let dst = corners;
+
+    compute_homography(&src, dst)
+}
+
+/// Solves for H such that H * src = dst
+/// Where src and dst are 4 points.
+fn compute_homography(src: &[Point; 4], dst: &[Point; 4]) -> [f32; 9] {
+    // Basic DLT (Direct Linear Transformation)
+    // For each point correspondence:
+    // x' = (h11 x + h12 y + h13) / (h31 x + h32 y + h33)
+    // y' = (h21 x + h22 y + h23) / (h31 x + h32 y + h33)
+    //
+    // Rearranging:
+    // x (h31 x' - h11) + y (h32 x' - h12) + (h33 x' - h13) = 0
+    // x (h31 y' - h21) + y (h32 y' - h22) + (h33 y' - h23) = 0
+    //
+    // We assume h33 = 1.0. The system is 8x8.
+    // matrix A * h = b
+    // where h = [h11, h12, h13, h21, h22, h23, h31, h32]^T
+    //
+    // A has 8 rows (2 per point).
+    // Row 2i:   [-x, -y, -1,  0,  0,  0, x*x', y*x']
+    // Row 2i+1: [ 0,  0,  0, -x, -y, -1, x*y', y*y']
+    //
+    // b has 8 elements.
+    // b[2i]   = -x'
+    // b[2i+1] = -y'
+
+    let mut a = [[0.0f32; 8]; 8];
+    let mut b = [0.0f32; 8];
+
+    for i in 0..4 {
+        let x = src[i].x;
+        let y = src[i].y;
+        let xp = dst[i].x;
+        let yp = dst[i].y;
+
+        // Row 1
+        a[2 * i][0] = -x;
+        a[2 * i][1] = -y;
+        a[2 * i][2] = -1.0;
+        a[2 * i][3] = 0.0;
+        a[2 * i][4] = 0.0;
+        a[2 * i][5] = 0.0;
+        a[2 * i][6] = x * xp;
+        a[2 * i][7] = y * xp;
+        b[2 * i] = -xp;
+
+        // Row 2
+        a[2 * i + 1][0] = 0.0;
+        a[2 * i + 1][1] = 0.0;
+        a[2 * i + 1][2] = 0.0;
+        a[2 * i + 1][3] = -x;
+        a[2 * i + 1][4] = -y;
+        a[2 * i + 1][5] = -1.0;
+        a[2 * i + 1][6] = x * yp;
+        a[2 * i + 1][7] = y * yp;
+        b[2 * i + 1] = -yp;
+    }
+
+    // Solve Ax = b using Gaussian elimination
+    let h = solve_gaussian(a, b);
+
+    [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1.0]
+}
+
+fn solve_gaussian(mut a: [[f32; 8]; 8], mut b: [f32; 8]) -> [f32; 8] {
+    let n = 8;
+
+    for i in 0..n {
+        // Pivot
+        let mut max_el = a[i][i].abs();
+        let mut max_row = i;
+        for (k, row) in a.iter().enumerate().skip(i + 1) {
+            if row[i].abs() > max_el {
+                max_el = row[i].abs();
+                max_row = k;
+            }
+        }
+
+        // Swap
+        // Swap
+        a.swap(max_row, i);
+        b.swap(max_row, i);
+
+        // Eliminate
+        if a[i][i].abs() < 1e-6 {
+            // Singular or near-singular
+            continue;
+        }
+
+        for k in (i + 1)..n {
+            let c = -a[k][i] / a[i][i];
+            let row_i = a[i]; // Copy row i for reference
+            for (j, val) in a[k].iter_mut().enumerate().skip(i) {
+                if i == j {
+                    *val = 0.0;
+                } else {
+                    *val += c * row_i[j];
+                }
+            }
+            b[k] += c * b[i];
+        }
+    }
+
+    // Back substitution
+    let mut x = [0.0; 8];
+    for i in (0..n).rev() {
+        if a[i][i].abs() < 1e-6 {
+            x[i] = 0.0;
+            continue;
+        }
+        let mut sum = 0.0;
+        for j in (i + 1)..n {
+            sum += a[i][j] * x[j];
+        }
+        x[i] = (b[i] - sum) / a[i][i];
+    }
+    x
+}

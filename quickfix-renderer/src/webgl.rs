@@ -352,22 +352,21 @@ impl WebGlRenderer {
         gl.uniform_1_i32(loc("u_texture").as_ref(), 0);
         gl.uniform_1_i32(loc("u_grain").as_ref(), 1);
 
-        gl.uniform_1_f32(
-            loc("u_geo_vertical").as_ref(),
-            settings
-                .geometry
-                .as_ref()
-                .and_then(|g| g.vertical)
-                .unwrap_or(0.0),
-        );
-        gl.uniform_1_f32(
-            loc("u_geo_horizontal").as_ref(),
-            settings
-                .geometry
-                .as_ref()
-                .and_then(|g| g.horizontal)
-                .unwrap_or(0.0),
-        );
+        let vertical = settings
+            .geometry
+            .as_ref()
+            .and_then(|g| g.vertical)
+            .unwrap_or(0.0);
+        let horizontal = settings
+            .geometry
+            .as_ref()
+            .and_then(|g| g.horizontal)
+            .unwrap_or(0.0);
+
+        let corners = crate::geometry::calculate_distortion_state(vertical, horizontal);
+        let matrix = crate::geometry::calculate_homography_from_unit_square(&corners);
+
+        gl.uniform_matrix_3_f32_slice(loc("u_homography_matrix").as_ref(), false, &matrix);
         gl.uniform_1_f32(
             loc("u_flip_vertical").as_ref(),
             if settings
