@@ -258,7 +258,7 @@ fn apply_crop_rotate(img: &RgbaImage, settings: &CropSettings) -> RgbaImage {
             let y = (h as f32 * ry).round() as u32;
             let new_w = max(1, (w as f32 * rw).round() as u32);
             let new_h = max(1, (h as f32 * rh).round() as u32);
-            
+
             // Re-check bounds to avoid OOB due to rounding
             let x = x.min(w - 1);
             let y = y.min(h - 1);
@@ -267,7 +267,7 @@ fn apply_crop_rotate(img: &RgbaImage, settings: &CropSettings) -> RgbaImage {
 
             result = image::imageops::crop_imm(&result, x, y, new_w, new_h).to_image();
         }
-    } 
+    }
     // Fallback to Aspect Ratio Crop if no explicit rect
     else if let Some(ar) = settings.aspect_ratio {
         if ar > 0.0 {
@@ -431,7 +431,9 @@ fn apply_grain_in_place(img: &mut RgbaImage, settings: &GrainSettings) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CropRect, ColorSettings, CropSettings, ExposureSettings, GeometrySettings, GrainSettings};
+    use crate::{
+        ColorSettings, CropRect, CropSettings, ExposureSettings, GeometrySettings, GrainSettings,
+    };
 
     fn create_test_image(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {
         let mut img = RgbaImage::new(width, height);
@@ -485,38 +487,38 @@ mod tests {
 
     #[test]
     fn test_apply_crop_rect() {
-         let img = create_test_image(100, 100, [255, 0, 0, 255]);
-         let settings = CropSettings {
-             rect: Some(CropRect {
-                 x: 0.25,
-                 y: 0.25,
-                 width: 0.5,
-                 height: 0.5,
-             }),
-             ..Default::default()
-         };
-         let res = apply_crop_rotate(&img, &settings);
- 
-         assert_eq!(res.width(), 50);
-         assert_eq!(res.height(), 50);
+        let img = create_test_image(100, 100, [255, 0, 0, 255]);
+        let settings = CropSettings {
+            rect: Some(CropRect {
+                x: 0.25,
+                y: 0.25,
+                width: 0.5,
+                height: 0.5,
+            }),
+            ..Default::default()
+        };
+        let res = apply_crop_rotate(&img, &settings);
+
+        assert_eq!(res.width(), 50);
+        assert_eq!(res.height(), 50);
     }
-    
+
     #[test]
     fn test_apply_crop_rect_out_of_bounds() {
-         let img = create_test_image(100, 100, [255, 0, 0, 255]);
-         let settings = CropSettings {
-             rect: Some(CropRect {
-                 x: 0.8,
-                 y: 0.8,
-                 width: 0.5, // Should be clamped to 0.2
-                 height: 0.5, // Should be clamped to 0.2
-             }),
-             ..Default::default()
-         };
-         let res = apply_crop_rotate(&img, &settings);
- 
-         assert_eq!(res.width(), 20); // 100 * 0.2
-         assert_eq!(res.height(), 20);
+        let img = create_test_image(100, 100, [255, 0, 0, 255]);
+        let settings = CropSettings {
+            rect: Some(CropRect {
+                x: 0.8,
+                y: 0.8,
+                width: 0.5,  // Should be clamped to 0.2
+                height: 0.5, // Should be clamped to 0.2
+            }),
+            ..Default::default()
+        };
+        let res = apply_crop_rotate(&img, &settings);
+
+        assert_eq!(res.width(), 20); // 100 * 0.2
+        assert_eq!(res.height(), 20);
     }
 
     #[test]

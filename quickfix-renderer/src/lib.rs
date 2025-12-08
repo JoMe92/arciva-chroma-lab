@@ -302,10 +302,16 @@ impl QuickFixRenderer {
         _options: Option<ProcessOptions>,
     ) -> Result<FrameResult, JsValue> {
         let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
-        
+
         // Debug Log
         use web_sys::console;
-        console::log_1(&format!("WASM: Processing frame. Crop rect: {:?}", adjustments.crop.as_ref().and_then(|c| c.rect.as_ref())).into());
+        console::log_1(
+            &format!(
+                "WASM: Processing frame. Crop rect: {:?}",
+                adjustments.crop.as_ref().and_then(|c| c.rect.as_ref())
+            )
+            .into(),
+        );
 
         let result = self
             .renderer
