@@ -116,8 +116,8 @@ export interface GrainSettings {
 export interface GeometrySettings {
     vertical?: number;
     horizontal?: number;
-    flip_vertical?: boolean;
-    flip_horizontal?: boolean;
+    flipVertical?: boolean;
+    flipHorizontal?: boolean;
 }
 
 export interface QuickFixAdjustments {

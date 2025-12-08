@@ -10,6 +10,9 @@ struct Settings {
     // Geometry
     geo_vertical: f32,
     geo_horizontal: f32,
+    // Flips
+    flip_vertical: f32,   // 0.0 or 1.0
+    flip_horizontal: f32, // 0.0 or 1.0
     
     // Crop/Rotate
     crop_rotation: f32, // radians
@@ -115,24 +118,7 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
     let x = f32(i32(in_vertex_index) - 1);
     let y = f32(i32(in_vertex_index & 1u) * 2 - 1);
     out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>(x * 0.5 + 0.5, 0.5 - y * 0.5); // 0..1
-    // Adjust UV for coordinate system if needed (WebGPU is Y-down in NDC? No, Y-up in NDC, but texture coords are usually top-left 0,0)
-    // Actually, let's just use standard quad:
-    // 0: -1, -1 (0, 1)
-    // 1:  3, -1 (2, 1)
-    // 2: -1,  3 (0, -1)
-    // UVs:
-    // 0: 0, 1
-    // 1: 2, 1
-    // 2: 0, -1
-    // This covers 0,0 to 1,1 in the bottom-left 0..1 range.
-    
-    // Let's use a simpler quad strip or indexed draw if we want, but full screen triangle is standard.
-    // uv = (pos + 1) / 2.
-    // In WebGPU, texture coords: 0,0 is top-left.
-    // NDC: -1,-1 is bottom-left.
-    // So if y is -1 (bottom), v should be 1.
-    // If y is 1 (top), v should be 0.
+    // Standard Quad UVs: 0,0 top-left (WebGPU texture space)
     out.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
     
     return out;
@@ -142,6 +128,31 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var uv = in.uv;
+    
+    // 0. Flips
+    // Apply flips BEFORE geometry warp / crop (Inverse logic: Modify UVs)
+    // If we want to flip the "Source", we modify the UVs we are about to sample with.
+    // If flip_h is true, uv.x = 1.0 - uv.x?
+    // Let's trace: Output pixel at x=0.1.
+    // If flipped, it should come from Source x=0.9.
+    // So uv.x = 1.0 - uv.x. Correct.
+    // Wait, geometry warp applies to the "Source Quad".
+    // If we flip, do we flip the quad or the content?
+    // Usually "Geometry" tool (skew) assumes it works on the original image orientation.
+    // If we flip FIRST (as requested: Flip -> Geometry), then we flip the content that enters the Geometry phase.
+    // So in inverse mapping: Start with Output UV.
+    // 1. Un-Crop/Un-Rotate (Inverse) -> done below.
+    // 2. Un-Warp (Inverse) -> done below.
+    // 3. Un-Flip (Inverse) -> do here?
+    // Wait, the shader steps traverse backwards from Output -> Source.
+    // Output -> [Crop/Rotate] -> [Geometry] -> [Flip] -> Source Image.
+    // So yes, Flip is applied LAST in the shader (closest to texture sample).
+    
+    // BUT! The `apply_geometry` logic in CPU does Flip *inside* the geometry loop, essentially modifying the source coordinate.
+    // `sample_bicubic(img, sx, sy)` where `sx` is flipped if needed.
+    // So if we integrate logic here:
+    // We calculate the Source UV where we want to sample.
+    // AND THEN flip it if needed.
     
     // 1. Geometry (Warp)
     // Inverse mapping: find where current UV comes from in source
@@ -369,6 +380,8 @@ uniform sampler2D u_grain;
 
 uniform float u_geo_vertical;
 uniform float u_geo_horizontal;
+uniform float u_flip_vertical;
+uniform float u_flip_horizontal;
 uniform float u_crop_rotation;
 uniform float u_crop_aspect;
 uniform float u_exposure;
@@ -446,6 +459,14 @@ void main() {
         vec2 top = mix(ul, ur, uv.x);
         vec2 bottom = mix(ll, lr, uv.x);
         uv = mix(top, bottom, uv.y);
+    }
+
+    // Apply Flips
+    if (u_flip_horizontal > 0.5) {
+        uv.x = 1.0 - uv.x;
+    }
+    if (u_flip_vertical > 0.5) {
+        uv.y = 1.0 - uv.y;
     }
     
     // 2. Crop / Rotate

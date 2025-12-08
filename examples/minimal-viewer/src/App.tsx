@@ -31,6 +31,8 @@ function App() {
   // Geometry Settings
   const [geoVertical, setGeoVertical] = useState(0); // New
   const [geoHorizontal, setGeoHorizontal] = useState(0); // New
+  const [flipVertical, setFlipVertical] = useState(false);
+  const [flipHorizontal, setFlipHorizontal] = useState(false);
 
   // Crop State
   // Draft state (what the sliders control)
@@ -156,7 +158,12 @@ function App() {
           // Only send rect if it is APPLIED. Otherwise send undefined (full image).
           rect: appliedCrop ? appliedCrop : undefined
         },
-        geometry: { vertical: geoVertical, horizontal: geoHorizontal }
+        geometry: {
+          vertical: geoVertical,
+          horizontal: geoHorizontal,
+          flipVertical: flipVertical,
+          flipHorizontal: flipHorizontal
+        }
       };
 
       try {
@@ -253,7 +260,7 @@ function App() {
     };
 
     render();
-  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, currentBackend]);
+  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
@@ -324,8 +331,20 @@ function App() {
           <label>Vertical Skew: {geoVertical}</label>
           <input type="range" min="-0.5" max="0.5" step="0.05" value={geoVertical} onChange={e => setGeoVertical(parseFloat(e.target.value))} />
 
+
           <label>Horizontal Skew: {geoHorizontal}</label>
           <input type="range" min="-0.5" max="0.5" step="0.05" value={geoHorizontal} onChange={e => setGeoHorizontal(parseFloat(e.target.value))} />
+
+          <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <input type="checkbox" checked={flipHorizontal} onChange={e => setFlipHorizontal(e.target.checked)} />
+              Flip Horizontal
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <input type="checkbox" checked={flipVertical} onChange={e => setFlipVertical(e.target.checked)} />
+              Flip Vertical
+            </label>
+          </div>
 
           <h3>Crop</h3>
           <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
