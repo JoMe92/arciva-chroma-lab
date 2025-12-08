@@ -64,6 +64,8 @@ pub struct GrainSettings {
 pub struct GeometrySettings {
     pub vertical: Option<f32>,
     pub horizontal: Option<f32>,
+    pub flip_vertical: Option<bool>,
+    pub flip_horizontal: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -114,6 +116,8 @@ export interface GrainSettings {
 export interface GeometrySettings {
     vertical?: number;
     horizontal?: number;
+    flip_vertical?: boolean;
+    flip_horizontal?: boolean;
 }
 
 export interface QuickFixAdjustments {
