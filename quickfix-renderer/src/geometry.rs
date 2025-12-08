@@ -264,11 +264,7 @@ fn compute_homography(src: &[Point; 4], dst: &[Point; 4]) -> [f32; 9] {
     // Solve Ax = b using Gaussian elimination
     let h = solve_gaussian(a, b);
 
-    [
-        h[0], h[1], h[2],
-        h[3], h[4], h[5],
-        h[6], h[7], 1.0
-    ]
+    [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1.0]
 }
 
 fn solve_gaussian(mut a: [[f32; 8]; 8], mut b: [f32; 8]) -> [f32; 8] {
@@ -278,22 +274,17 @@ fn solve_gaussian(mut a: [[f32; 8]; 8], mut b: [f32; 8]) -> [f32; 8] {
         // Pivot
         let mut max_el = a[i][i].abs();
         let mut max_row = i;
-        for k in (i + 1)..n {
-            if a[k][i].abs() > max_el {
-                max_el = a[k][i].abs();
+        for (k, row) in a.iter().enumerate().skip(i + 1) {
+            if row[i].abs() > max_el {
+                max_el = row[i].abs();
                 max_row = k;
             }
         }
 
         // Swap
-        for k in i..n {
-            let tmp = a[max_row][k];
-            a[max_row][k] = a[i][k];
-            a[i][k] = tmp;
-        }
-        let tmp = b[max_row];
-        b[max_row] = b[i];
-        b[i] = tmp;
+        // Swap
+        a.swap(max_row, i);
+        b.swap(max_row, i);
 
         // Eliminate
         if a[i][i].abs() < 1e-6 {
@@ -303,11 +294,12 @@ fn solve_gaussian(mut a: [[f32; 8]; 8], mut b: [f32; 8]) -> [f32; 8] {
 
         for k in (i + 1)..n {
             let c = -a[k][i] / a[i][i];
-            for j in i..n {
+            let row_i = a[i]; // Copy row i for reference
+            for (j, val) in a[k].iter_mut().enumerate().skip(i) {
                 if i == j {
-                    a[k][j] = 0.0;
+                    *val = 0.0;
                 } else {
-                    a[k][j] += c * a[i][j];
+                    *val += c * row_i[j];
                 }
             }
             b[k] += c * b[i];
@@ -329,4 +321,3 @@ fn solve_gaussian(mut a: [[f32; 8]; 8], mut b: [f32; 8]) -> [f32; 8] {
     }
     x
 }
-

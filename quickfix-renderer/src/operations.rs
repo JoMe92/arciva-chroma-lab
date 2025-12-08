@@ -187,7 +187,7 @@ fn apply_geometry(img: &RgbaImage, settings: &GeometrySettings) -> RgbaImage {
             }
 
             // Check bounds (0..1)
-            if sx_norm < 0.0 || sx_norm > 1.0 || sy_norm < 0.0 || sy_norm > 1.0 {
+            if !(0.0..=1.0).contains(&sx_norm) || !(0.0..=1.0).contains(&sy_norm) {
                 // Out of bounds - transparent
                 new_img.put_pixel(x, y, Rgba([0, 0, 0, 0]));
                 continue;

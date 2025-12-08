@@ -362,15 +362,11 @@ impl WebGlRenderer {
             .as_ref()
             .and_then(|g| g.horizontal)
             .unwrap_or(0.0);
-        
+
         let corners = crate::geometry::calculate_distortion_state(vertical, horizontal);
         let matrix = crate::geometry::calculate_homography_from_unit_square(&corners);
 
-        gl.uniform_matrix_3_f32_slice(
-            loc("u_homography_matrix").as_ref(),
-            false,
-            &matrix,
-        );
+        gl.uniform_matrix_3_f32_slice(loc("u_homography_matrix").as_ref(), false, &matrix);
         gl.uniform_1_f32(
             loc("u_flip_vertical").as_ref(),
             if settings

@@ -318,8 +318,16 @@ impl Renderer for WebGpuRenderer {
 
         // Uniforms
         // Calculate Homography
-        let vertical = settings.geometry.as_ref().and_then(|g| g.vertical).unwrap_or(0.0);
-        let horizontal = settings.geometry.as_ref().and_then(|g| g.horizontal).unwrap_or(0.0);
+        let vertical = settings
+            .geometry
+            .as_ref()
+            .and_then(|g| g.vertical)
+            .unwrap_or(0.0);
+        let horizontal = settings
+            .geometry
+            .as_ref()
+            .and_then(|g| g.horizontal)
+            .unwrap_or(0.0);
         let corners = crate::geometry::calculate_distortion_state(vertical, horizontal);
         let h = crate::geometry::calculate_homography_from_unit_square(&corners); // [f32; 9]
 
@@ -638,8 +646,16 @@ impl Renderer for WebGpuRenderer {
 
         // Uniforms (same as render)
         // Calculate Homography
-        let vertical = settings.geometry.as_ref().and_then(|g| g.vertical).unwrap_or(0.0);
-        let horizontal = settings.geometry.as_ref().and_then(|g| g.horizontal).unwrap_or(0.0);
+        let vertical = settings
+            .geometry
+            .as_ref()
+            .and_then(|g| g.vertical)
+            .unwrap_or(0.0);
+        let horizontal = settings
+            .geometry
+            .as_ref()
+            .and_then(|g| g.horizontal)
+            .unwrap_or(0.0);
         let corners = crate::geometry::calculate_distortion_state(vertical, horizontal);
         let h = crate::geometry::calculate_homography_from_unit_square(&corners); // [f32; 9]
 
