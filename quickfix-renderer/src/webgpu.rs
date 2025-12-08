@@ -13,6 +13,8 @@ use wgpu::util::DeviceExt;
 struct SettingsUniform {
     geo_vertical: f32,
     geo_horizontal: f32,
+    flip_vertical: f32,
+    flip_horizontal: f32,
     crop_rotation: f32,
     crop_aspect: f32,
     exposure: f32,
@@ -25,7 +27,16 @@ struct SettingsUniform {
     grain_size: f32,
     src_width: f32,
     src_height: f32,
-    _padding: [f32; 2], // Pad to 16 bytes alignment (14 floats = 56 bytes. 64 bytes is 16 floats. Need 2 more.)
+    // _padding: [f32; 0],
+    // Warning: Pod requires size to be valid. [f32; 0] is size 0.
+    // Let's remove _padding if it's exact.
+    // But verify:
+    // geo_v, geo_h, flip_v, flip_h (4)
+    // crop_rot, crop_asp, exp, cont (4)
+    // high, shad, temp, tint (4)
+    // grain_amt, grain_sz, src_w, src_h (4)
+    // Total 16 floats.
+    // Remove padding field.
 }
 
 pub struct WebGpuRenderer {
@@ -317,6 +328,26 @@ impl Renderer for WebGpuRenderer {
                 .as_ref()
                 .and_then(|g| g.horizontal)
                 .unwrap_or(0.0),
+            flip_vertical: if settings
+                .geometry
+                .as_ref()
+                .and_then(|g| g.flip_vertical)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
+            flip_horizontal: if settings
+                .geometry
+                .as_ref()
+                .and_then(|g| g.flip_horizontal)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
             crop_rotation: settings
                 .crop
                 .as_ref()
@@ -362,7 +393,6 @@ impl Renderer for WebGpuRenderer {
             },
             src_width: width as f32,
             src_height: height as f32,
-            _padding: [0.0; 2],
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -610,6 +640,26 @@ impl Renderer for WebGpuRenderer {
                 .as_ref()
                 .and_then(|g| g.horizontal)
                 .unwrap_or(0.0),
+            flip_vertical: if settings
+                .geometry
+                .as_ref()
+                .and_then(|g| g.flip_vertical)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
+            flip_horizontal: if settings
+                .geometry
+                .as_ref()
+                .and_then(|g| g.flip_horizontal)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
             crop_rotation: settings
                 .crop
                 .as_ref()
@@ -655,7 +705,6 @@ impl Renderer for WebGpuRenderer {
             },
             src_width: width as f32,
             src_height: height as f32,
-            _padding: [0.0; 2],
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

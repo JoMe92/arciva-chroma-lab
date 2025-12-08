@@ -64,6 +64,8 @@ pub struct GrainSettings {
 pub struct GeometrySettings {
     pub vertical: Option<f32>,
     pub horizontal: Option<f32>,
+    pub flip_vertical: Option<bool>,
+    pub flip_horizontal: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -114,6 +116,8 @@ export interface GrainSettings {
 export interface GeometrySettings {
     vertical?: number;
     horizontal?: number;
+    flipVertical?: boolean;
+    flipHorizontal?: boolean;
 }
 
 export interface QuickFixAdjustments {
@@ -369,12 +373,14 @@ mod tests {
         let mut data1 = vec![128u8; (width * height * 4) as usize];
         let mut data2 = vec![128u8; (width * height * 4) as usize];
 
-        let mut adj = QuickFixAdjustments::default();
-        adj.grain = Some(GrainSettings {
-            amount: 0.5,
-            size: "medium".to_string(),
-            seed: Some(555),
-        });
+        let adj = QuickFixAdjustments {
+            grain: Some(GrainSettings {
+                amount: 0.5,
+                size: "medium".to_string(),
+                seed: Some(555),
+            }),
+            ..Default::default()
+        };
 
         let res1 = operations::process_frame_internal(&mut data1, width, height, &adj).unwrap();
         let res2 = operations::process_frame_internal(&mut data2, width, height, &adj).unwrap();

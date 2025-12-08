@@ -120,9 +120,22 @@ fn sample_bicubic(img: &RgbaImage, u: f32, v: f32) -> Rgba<u8> {
 fn apply_geometry(img: &RgbaImage, settings: &GeometrySettings) -> RgbaImage {
     let v = clamp(settings.vertical.unwrap_or(0.0), -1.0, 1.0);
     let h = clamp(settings.horizontal.unwrap_or(0.0), -1.0, 1.0);
+    let flip_v = settings.flip_vertical.unwrap_or(false);
+    let flip_h = settings.flip_horizontal.unwrap_or(false);
 
+    // Fast path: No perspective distortion
     if v.abs() < 1e-5 && h.abs() < 1e-5 {
-        return img.clone();
+        if !flip_h && !flip_v {
+            return img.clone();
+        }
+        let mut res = img.clone();
+        if flip_h {
+            res = image::imageops::flip_horizontal(&res);
+        }
+        if flip_v {
+            res = image::imageops::flip_vertical(&res);
+        }
+        return res;
     }
 
     let width = img.width();
@@ -147,32 +160,19 @@ fn apply_geometry(img: &RgbaImage, settings: &GeometrySettings) -> RgbaImage {
     );
     let ur = (clamp_x(width as f32 - top_inset), clamp_y(0.0 + right_y));
 
-    // Calculate homography H such that H * [x, y, 1]^T ~ [u, v, 1]^T
-    // This is standard. I'll use a Gaussian elimination solver for 8x8.
-    // Or better, since source is a rectangle aligned with axes, there are simpler formulas.
-    // But let's just stick to a general solver for robustness.
-    // Actually, to save code size and complexity, I'll use the "bilinear interpolation of corners" for the coordinate mapping.
-    // It produces a slightly different look than perspective (lines don't stay straight), but it's much simpler.
-    // Wait, "Geometry" tool usually expects straight lines to stay straight.
-    // I should really try to do perspective.
-
-    // Let's assume for now I will use a simple perspective setup.
-    // Since I can't easily import a solver, I'll use a crate if I can? `projection` crate?
-    // No, I'll stick to the bilinear coordinate mapping for this iteration.
-    // It's a "Quick Fix" renderer.
-    // "Geometry: horizontal/vertical in [-1, 1], warps quad with up to ~25% inset per axis"
-    // The Python code uses `Image.QUAD`.
-
     let mut new_img = RgbaImage::new(width, height);
 
     // Bilinear coordinate interpolation (Approximation of perspective)
     // P(u,v) = (1-x)(1-y)UL + x(1-y)UR + (1-x)yLL + xyLR
     // where x, y are normalized 0..1
 
+    let w_f32 = width as f32;
+    let h_f32 = height as f32;
+
     for y in 0..height {
-        let v_ratio = y as f32 / height as f32;
+        let v_ratio = y as f32 / h_f32;
         for x in 0..width {
-            let u_ratio = x as f32 / width as f32;
+            let u_ratio = x as f32 / w_f32;
 
             // Interpolate X coordinate
             let top_x = ul.0 + (ur.0 - ul.0) * u_ratio;
@@ -184,8 +184,20 @@ fn apply_geometry(img: &RgbaImage, settings: &GeometrySettings) -> RgbaImage {
             let right_y = ur.1 + (lr.1 - ur.1) * v_ratio;
             let src_y = left_y + (right_y - left_y) * u_ratio;
 
+            // Apply flip to source coordinates
+            // If flipped, look from the other side.
+            let mut sx = src_x;
+            let mut sy = src_y;
+
+            if flip_h {
+                sx = (w_f32 - 1.0) - sx;
+            }
+            if flip_v {
+                sy = (h_f32 - 1.0) - sy;
+            }
+
             // Sample
-            let px = sample_bicubic(img, src_x, src_y);
+            let px = sample_bicubic(img, sx, sy);
             new_img.put_pixel(x, y, px);
         }
     }
@@ -431,9 +443,7 @@ fn apply_grain_in_place(img: &mut RgbaImage, settings: &GrainSettings) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        ColorSettings, CropRect, CropSettings, ExposureSettings, GeometrySettings, GrainSettings,
-    };
+    use crate::{ColorSettings, CropRect, CropSettings, ExposureSettings, GeometrySettings};
 
     fn create_test_image(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {
         let mut img = RgbaImage::new(width, height);
@@ -527,9 +537,96 @@ mod tests {
         let settings = GeometrySettings {
             vertical: Some(0.5),
             horizontal: Some(-0.2),
+            ..Default::default()
         };
         let res = apply_geometry(&img, &settings);
         assert_eq!(res.width(), 50);
         assert_eq!(res.height(), 50);
+    }
+
+    #[test]
+    fn test_flip_horizontal() {
+        // Create an image where left side is red, right side is blue
+        let width = 10;
+        let height = 10;
+        let mut img = RgbaImage::new(width, height);
+        for y in 0..height {
+            for x in 0..width {
+                if x < width / 2 {
+                    img.put_pixel(x, y, Rgba([255, 0, 0, 255]));
+                } else {
+                    img.put_pixel(x, y, Rgba([0, 0, 255, 255]));
+                }
+            }
+        }
+
+        let settings = GeometrySettings {
+            flip_horizontal: Some(true),
+            ..Default::default()
+        };
+        let res = apply_geometry(&img, &settings);
+
+        // Check if flipped: Left should be blue, Right should be red
+        let left_px = res.get_pixel(0, 0);
+        let right_px = res.get_pixel(width - 1, 0);
+
+        assert_eq!(left_px[0], 0); // Blue component is at index 2, Red at 0
+        assert_eq!(left_px[2], 255);
+        assert_eq!(right_px[0], 255);
+        assert_eq!(right_px[2], 0);
+    }
+
+    #[test]
+    fn test_flip_vertical() {
+        // Top red, Bottom blue
+        let width = 10;
+        let height = 10;
+        let mut img = RgbaImage::new(width, height);
+        for y in 0..height {
+            for x in 0..width {
+                if y < height / 2 {
+                    img.put_pixel(x, y, Rgba([255, 0, 0, 255]));
+                } else {
+                    img.put_pixel(x, y, Rgba([0, 0, 255, 255]));
+                }
+            }
+        }
+
+        let settings = GeometrySettings {
+            flip_vertical: Some(true),
+            ..Default::default()
+        };
+        let res = apply_geometry(&img, &settings);
+
+        // Top should be blue, Bottom should be red
+        let top_px = res.get_pixel(0, 0);
+        let bottom_px = res.get_pixel(0, height - 1);
+
+        assert_eq!(top_px[0], 0);
+        assert_eq!(top_px[2], 255);
+        assert_eq!(bottom_px[0], 255);
+        assert_eq!(bottom_px[2], 0);
+    }
+
+    #[test]
+    fn test_flip_and_geometry() {
+        // If we flip AND apply geometry, it should work without panic.
+        // Verifying exact pixel values with perspective + flip is hard,
+        // so we check structural properties or basic color preservation.
+        let img = create_test_image(20, 20, [100, 100, 100, 255]);
+        let settings = GeometrySettings {
+            vertical: Some(0.1),
+            flip_horizontal: Some(true),
+            ..Default::default()
+        };
+        let res = apply_geometry(&img, &settings);
+        assert_eq!(res.width(), 20);
+        assert_eq!(res.height(), 20);
+
+        // Check center pixel is preserved (approx)
+        let cx = 10;
+        let cy = 10;
+        let px = res.get_pixel(cx, cy);
+        assert!(px[0] > 90 && px[0] < 110);
     }
 }
