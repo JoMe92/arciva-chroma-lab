@@ -140,61 +140,62 @@ fn apply_geometry(img: &RgbaImage, settings: &GeometrySettings) -> RgbaImage {
 
     let width = img.width();
     let height = img.height();
-    let max_x_offset = width as f32 * 0.25;
-    let max_y_offset = height as f32 * 0.25;
 
-    let top_inset = v * max_x_offset;
-    let bottom_inset = -v * max_x_offset;
-    let left_y = h * max_y_offset;
-    let right_y = -h * max_y_offset;
+    // Homography Calculation
+    let corners = crate::geometry::calculate_distortion_state(v, h);
+    let matrix = crate::geometry::calculate_homography_from_unit_square(&corners);
 
-    // Calculate quad corners (source coordinates mapped to destination)
-    let clamp_x = |val: f32| -> f32 { val.max(-max_x_offset).min(width as f32 + max_x_offset) };
-    let clamp_y = |val: f32| -> f32 { val.max(-max_y_offset).min(height as f32 + max_y_offset) };
-
-    let ul = (clamp_x(0.0 + top_inset), clamp_y(0.0 + left_y));
-    let ll = (clamp_x(0.0 + bottom_inset), clamp_y(height as f32 - left_y));
-    let lr = (
-        clamp_x(width as f32 - bottom_inset),
-        clamp_y(height as f32 - right_y),
-    );
-    let ur = (clamp_x(width as f32 - top_inset), clamp_y(0.0 + right_y));
+    // Apply flip logic separately if needed or integrate.
+    // The shader applies flip AFTER warp (closer to texture sample).
+    // Let's match shader logic: Output UV -> (Warp) -> Source UV -> (Flip) -> Sample.
 
     let mut new_img = RgbaImage::new(width, height);
-
-    // Bilinear coordinate interpolation (Approximation of perspective)
-    // P(u,v) = (1-x)(1-y)UL + x(1-y)UR + (1-x)yLL + xyLR
-    // where x, y are normalized 0..1
 
     let w_f32 = width as f32;
     let h_f32 = height as f32;
 
     for y in 0..height {
-        let v_ratio = y as f32 / h_f32;
+        let v_coord = y as f32 / h_f32; // Normalised Output V
         for x in 0..width {
-            let u_ratio = x as f32 / w_f32;
+            let u_coord = x as f32 / w_f32; // Normalised Output U
 
-            // Interpolate X coordinate
-            let top_x = ul.0 + (ur.0 - ul.0) * u_ratio;
-            let bottom_x = ll.0 + (lr.0 - ll.0) * u_ratio;
-            let src_x = top_x + (bottom_x - top_x) * v_ratio;
+            // 1. Homography Transform
+            // src_h = H * (u, v, 1)
+            let src_x_h = matrix[0] * u_coord + matrix[1] * v_coord + matrix[2];
+            let src_y_h = matrix[3] * u_coord + matrix[4] * v_coord + matrix[5];
+            let src_z_h = matrix[6] * u_coord + matrix[7] * v_coord + matrix[8];
 
-            // Interpolate Y coordinate
-            let left_y = ul.1 + (ll.1 - ul.1) * v_ratio;
-            let right_y = ur.1 + (lr.1 - ur.1) * v_ratio;
-            let src_y = left_y + (right_y - left_y) * u_ratio;
+            // Perspective Divide
+            let mut sx_norm = if src_z_h.abs() > 1e-6 {
+                src_x_h / src_z_h
+            } else {
+                src_x_h
+            };
 
-            // Apply flip to source coordinates
-            // If flipped, look from the other side.
-            let mut sx = src_x;
-            let mut sy = src_y;
+            let mut sy_norm = if src_z_h.abs() > 1e-6 {
+                src_y_h / src_z_h
+            } else {
+                src_y_h
+            };
 
+            // 2. Apply Flips
             if flip_h {
-                sx = (w_f32 - 1.0) - sx;
+                sx_norm = 1.0 - sx_norm;
             }
             if flip_v {
-                sy = (h_f32 - 1.0) - sy;
+                sy_norm = 1.0 - sy_norm;
             }
+
+            // Check bounds (0..1)
+            if sx_norm < 0.0 || sx_norm > 1.0 || sy_norm < 0.0 || sy_norm > 1.0 {
+                // Out of bounds - transparent
+                new_img.put_pixel(x, y, Rgba([0, 0, 0, 0]));
+                continue;
+            }
+
+            // Map back to pixel coordinates
+            let sx = sx_norm * w_f32;
+            let sy = sy_norm * h_f32;
 
             // Sample
             let px = sample_bicubic(img, sx, sy);

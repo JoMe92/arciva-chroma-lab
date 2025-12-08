@@ -11,8 +11,8 @@ use wgpu::util::DeviceExt;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct SettingsUniform {
-    geo_vertical: f32,
-    geo_horizontal: f32,
+    homography_matrix: [[f32; 4]; 3], // 48 bytes (3 vec3s aligned to vec4)
+    geo_padding: f32,                 // 4 bytes
     flip_vertical: f32,
     flip_horizontal: f32,
     crop_rotation: f32,
@@ -317,17 +317,25 @@ impl Renderer for WebGpuRenderer {
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Uniforms
+        // Calculate Homography
+        let vertical = settings.geometry.as_ref().and_then(|g| g.vertical).unwrap_or(0.0);
+        let horizontal = settings.geometry.as_ref().and_then(|g| g.horizontal).unwrap_or(0.0);
+        let corners = crate::geometry::calculate_distortion_state(vertical, horizontal);
+        let h = crate::geometry::calculate_homography_from_unit_square(&corners); // [f32; 9]
+
+        // Pack into 3 vec4s for std140 layout
+        // Col 0: h[0], h[1], h[2], pad
+        // Col 1: h[3], h[4], h[5], pad
+        // Col 2: h[6], h[7], h[8], pad
+        let mat = [
+            [h[0], h[1], h[2], 0.0],
+            [h[3], h[4], h[5], 0.0],
+            [h[6], h[7], h[8], 0.0],
+        ];
+
         let uniforms = SettingsUniform {
-            geo_vertical: settings
-                .geometry
-                .as_ref()
-                .and_then(|g| g.vertical)
-                .unwrap_or(0.0),
-            geo_horizontal: settings
-                .geometry
-                .as_ref()
-                .and_then(|g| g.horizontal)
-                .unwrap_or(0.0),
+            homography_matrix: mat,
+            geo_padding: 0.0,
             flip_vertical: if settings
                 .geometry
                 .as_ref()
@@ -629,17 +637,25 @@ impl Renderer for WebGpuRenderer {
         });
 
         // Uniforms (same as render)
+        // Calculate Homography
+        let vertical = settings.geometry.as_ref().and_then(|g| g.vertical).unwrap_or(0.0);
+        let horizontal = settings.geometry.as_ref().and_then(|g| g.horizontal).unwrap_or(0.0);
+        let corners = crate::geometry::calculate_distortion_state(vertical, horizontal);
+        let h = crate::geometry::calculate_homography_from_unit_square(&corners); // [f32; 9]
+
+        // Pack into 3 vec4s for std140 layout
+        // Col 0: h[0], h[1], h[2], pad
+        // Col 1: h[3], h[4], h[5], pad
+        // Col 2: h[6], h[7], h[8], pad
+        let mat = [
+            [h[0], h[1], h[2], 0.0],
+            [h[3], h[4], h[5], 0.0],
+            [h[6], h[7], h[8], 0.0],
+        ];
+
         let uniforms = SettingsUniform {
-            geo_vertical: settings
-                .geometry
-                .as_ref()
-                .and_then(|g| g.vertical)
-                .unwrap_or(0.0),
-            geo_horizontal: settings
-                .geometry
-                .as_ref()
-                .and_then(|g| g.horizontal)
-                .unwrap_or(0.0),
+            homography_matrix: mat,
+            geo_padding: 0.0,
             flip_vertical: if settings
                 .geometry
                 .as_ref()
