@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { QuickFixClient } from '../../../quickfix-renderer/pkg/client.js';
-import { RendererOptions } from 'quickfix-renderer';
+import { RendererOptions, get_opaque_crop } from 'quickfix-renderer';
 
 // Import worker URL using Vite's ?url suffix
 // We need to point to the JS file in the package.
@@ -42,6 +42,7 @@ function App() {
   const [cropH, setCropH] = useState(1.0);
   // Applied state (what is sent to backend)
   const [appliedCrop, setAppliedCrop] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
+  const [autoCrop, setAutoCrop] = useState(false);
 
   const applyCrop = () => {
     setAppliedCrop({ x: cropX, y: cropY, width: cropW, height: cropH });
@@ -51,6 +52,28 @@ function App() {
     setAppliedCrop(null);
   };
 
+  // Auto Crop Effect
+  useEffect(() => {
+    if (autoCrop && image && Math.abs(rotation) > 0) {
+      // Calculate opaque crop
+      const crop = get_opaque_crop(rotation, image.width, image.height);
+
+      // Update sliders
+      setCropX(crop.x);
+      setCropY(crop.y);
+      setCropW(crop.width);
+      setCropH(crop.height);
+
+      // Auto-apply ONLY if we want real-time update. 
+      // The user usually expects "Auto Crop" to just SET the crop.
+      setAppliedCrop({
+        x: crop.x,
+        y: crop.y,
+        width: crop.width,
+        height: crop.height
+      });
+    }
+  }, [rotation, autoCrop, image]);
 
 
   // Initialize Client
@@ -330,6 +353,11 @@ function App() {
           <h3>Geometry</h3>
           <label>Rotation: {rotation}</label>
           <input type="range" min="-45" max="45" step="1" value={rotation} onChange={e => setRotation(parseFloat(e.target.value))} />
+
+          <label>
+            <input type="checkbox" checked={autoCrop} onChange={e => setAutoCrop(e.target.checked)} />
+            Auto Crop (Straighten)
+          </label>
 
           <label>Vertical Skew: {geoVertical}</label>
           <input type="range" min="-0.5" max="0.5" step="0.05" value={geoVertical} onChange={e => setGeoVertical(parseFloat(e.target.value))} />
