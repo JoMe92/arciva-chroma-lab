@@ -28,7 +28,9 @@ struct SettingsUniform {
     src_width: f32,
     src_height: f32,
     lut_intensity: f32,
-    _padding: f32, // Pad to 16 bytes alignment if needed.
+    denoise_luminance: f32,
+    denoise_color: f32,
+    _padding: f32, 
                    // Previous: 16 floats exactly?
                    // geo (4), flip (4), crop_rot/asp/exp/cont (4), high/shad/temp/tint (4), grain/size/w/h (4).
                    // Total 20 floats?
@@ -533,6 +535,8 @@ impl Renderer for WebGpuRenderer {
             } else {
                 0.0
             },
+            denoise_luminance: settings.denoise.as_ref().map(|d| d.luminance).unwrap_or(0.0),
+            denoise_color: settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
             _padding: 0.0,
         };
 
@@ -879,6 +883,8 @@ impl Renderer for WebGpuRenderer {
             src_width: width as f32,
             src_height: height as f32,
             lut_intensity: settings.lut.as_ref().map(|l| l.intensity).unwrap_or(0.0),
+            denoise_luminance: settings.denoise.as_ref().map(|d| d.luminance).unwrap_or(0.0),
+            denoise_color: settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
             _padding: 0.0,
         };
 
