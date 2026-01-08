@@ -38,7 +38,7 @@ pub trait Renderer {
         canvas: &web_sys::HtmlCanvasElement,
     ) -> Result<(), RendererError>;
 
-    /// Set a 3D LUT for color grading. 
+    /// Set a 3D LUT for color grading.
     /// Data is flat RGB float array. Size is dimension size (e.g. 33 for 33x33x33).
     async fn set_lut(&mut self, _data: &[f32], _size: u32) -> Result<(), RendererError> {
         Ok(()) // Default implementation for backends that don't support it yet

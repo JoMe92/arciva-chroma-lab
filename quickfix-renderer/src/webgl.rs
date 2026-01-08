@@ -15,7 +15,7 @@ pub struct WebGlRenderer {
     texture: Option<glow::Texture>,
     grain_texture: Option<glow::Texture>,
     lut_texture: Option<glow::Texture>,
-    
+
     lut_cache: Option<(Vec<f32>, u32)>,
     lut_dirty: bool,
 
@@ -319,11 +319,31 @@ impl WebGlRenderer {
             // LUT Texture
             let lut_texture = gl.create_texture().map_err(RendererError::InitFailed)?;
             gl.bind_texture(glow::TEXTURE_3D, Some(lut_texture));
-            gl.tex_parameter_i32(glow::TEXTURE_3D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_3D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_3D, glow::TEXTURE_WRAP_R, glow::CLAMP_TO_EDGE as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_3D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_3D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_3D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_3D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_3D,
+                glow::TEXTURE_WRAP_R,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_3D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_3D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR as i32,
+            );
             // Don't upload data here, will do in render if dirty
             self.lut_dirty = true;
 
@@ -375,7 +395,7 @@ impl WebGlRenderer {
         gl.bind_texture(glow::TEXTURE_3D, self.lut_texture);
 
         if self.lut_dirty {
-             if let Some((data, size)) = &self.lut_cache {
+            if let Some((data, size)) = &self.lut_cache {
                 // Upload data
                 // tex_image_3d(target, level, internalformat, width, height, depth, border, format, type, pixels)
                 gl.tex_image_3d(
@@ -390,10 +410,10 @@ impl WebGlRenderer {
                     glow::FLOAT,
                     Some(bytemuck::cast_slice(data)),
                 );
-             } else {
-                 // Upload placeholder 1x1x1 white
-                 let placeholder = [1.0f32, 1.0, 1.0];
-                 gl.tex_image_3d(
+            } else {
+                // Upload placeholder 1x1x1 white
+                let placeholder = [1.0f32, 1.0, 1.0];
+                gl.tex_image_3d(
                     glow::TEXTURE_3D,
                     0,
                     glow::RGB32F as i32,
@@ -404,9 +424,9 @@ impl WebGlRenderer {
                     glow::RGB,
                     glow::FLOAT,
                     Some(bytemuck::cast_slice(&placeholder)),
-                 );
-             }
-             self.lut_dirty = false;
+                );
+            }
+            self.lut_dirty = false;
         }
 
         // Uniforms

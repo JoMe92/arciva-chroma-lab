@@ -4,10 +4,10 @@ use wasm_bindgen::prelude::*;
 
 pub mod api_types;
 pub mod geometry;
+pub mod lut_parser;
 pub mod operations;
 pub mod renderer;
 pub mod shaders;
-pub mod lut_parser;
 #[cfg(target_arch = "wasm32")]
 pub mod webgl;
 #[cfg(target_arch = "wasm32")]
@@ -263,10 +263,10 @@ impl Renderer for CpuRenderer {
     ) -> Result<Vec<u8>, RendererError> {
         // We need to copy data because process_frame_internal takes &mut [u8]
         let mut data_vec = data.to_vec();
-        
+
         // Pass LUT data if available
         let lut_ref = self.lut.as_ref().map(|(d, s)| (d.as_slice(), *s));
-        
+
         let (res, _, _) =
             operations::process_frame_internal(&mut data_vec, width, height, settings, lut_ref)
                 .map_err(RendererError::RenderFailed)?;
@@ -489,8 +489,10 @@ mod tests {
             ..Default::default()
         };
 
-        let res1 = operations::process_frame_internal(&mut data1, width, height, &adj, None).unwrap();
-        let res2 = operations::process_frame_internal(&mut data2, width, height, &adj, None).unwrap();
+        let res1 =
+            operations::process_frame_internal(&mut data1, width, height, &adj, None).unwrap();
+        let res2 =
+            operations::process_frame_internal(&mut data2, width, height, &adj, None).unwrap();
 
         assert_eq!(
             res1.0, res2.0,
@@ -513,7 +515,7 @@ mod tests {
         let width = 2;
         let height = 2;
         let mut img = create_test_image(width, height, [100, 100, 100, 255]);
-        
+
         // Identity LUT 2x2x2
         // Order: R(0.0), R(1.0). For each R, G(0), G(1). For each G, B(0), B(1).
         // size = 2.
@@ -528,42 +530,42 @@ mod tests {
         // b changes 0..size.
         // So memory layout: r changes fastest (contiguous).
         // 0,0,0 -> 1,0,0 -> 0,1,0 -> 1,1,0 ...
-        
+
         // Identity LUT: value at (r,g,b) is (r,g,b).
         let mut lut_data = Vec::new();
         for b in 0..2 {
             for g in 0..2 {
                 for r in 0..2 {
-                     lut_data.push(r as f32);
-                     lut_data.push(g as f32);
-                     lut_data.push(b as f32);
+                    lut_data.push(r as f32);
+                    lut_data.push(g as f32);
+                    lut_data.push(b as f32);
                 }
             }
         }
-        
+
         let settings = Lut3DSettings {
             intensity: 1.0,
             ..Default::default()
         };
-        
+
         apply_lut_in_place(&mut img, &lut_data, 2, &settings);
-        
+
         let px = img.get_pixel(0, 0);
-        // Input 100/255 ~= 0.392. 
+        // Input 100/255 ~= 0.392.
         // LUT should map 0.392 -> 0.392.
         // Allow simplified rounding error
         assert!((px[0] as i32 - 100).abs() <= 1);
         assert!((px[1] as i32 - 100).abs() <= 1);
         assert!((px[2] as i32 - 100).abs() <= 1);
     }
-    
+
     #[test]
     fn test_apply_lut_red() {
         let width = 2;
         let height = 2;
         // Input gray
         let mut img = create_test_image(width, height, [100, 100, 100, 255]);
-        
+
         // Red LUT: Always returns (1.0, 0.0, 0.0)
         let mut lut_data = Vec::new(); // 2x2x2
         for _ in 0..8 {
@@ -571,19 +573,19 @@ mod tests {
             lut_data.push(0.0);
             lut_data.push(0.0);
         }
-        
+
         let settings = Lut3DSettings {
             intensity: 0.5, // 50% blend
             ..Default::default()
         };
-        
+
         apply_lut_in_place(&mut img, &lut_data, 2, &settings);
-        
+
         let px = img.get_pixel(0, 0);
         // Original: 100. Target: 255, 0, 0.
         // Result: 100 * 0.5 + 255 * 0.5 = 50 + 127.5 = 177.5
         // G/B: 100 * 0.5 + 0 = 50.
-        
+
         assert!(px[0] >= 177 && px[0] <= 178);
         assert!(px[1] >= 49 && px[1] <= 51);
         assert!(px[2] >= 49 && px[2] <= 51);

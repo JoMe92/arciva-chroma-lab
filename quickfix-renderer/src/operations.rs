@@ -17,7 +17,7 @@ fn clamp_u8(v: f32) -> u8 {
     clamp(v, 0.0, 255.0) as u8
 }
 
-    use crate::api_types::Lut3DSettings;
+use crate::api_types::Lut3DSettings;
 
 pub fn process_frame_internal(
     data: &mut [u8],
@@ -52,7 +52,7 @@ pub fn process_frame_internal(
 
     // 5. LUT
     if let (Some(lut_settings), Some((lut_data, lut_size))) = (&adjustments.lut, lut_buffer) {
-         apply_lut_in_place(&mut img, lut_data, lut_size, lut_settings);
+        apply_lut_in_place(&mut img, lut_data, lut_size, lut_settings);
     }
 
     // 6. Grain
@@ -449,8 +449,12 @@ fn apply_grain_in_place(img: &mut RgbaImage, settings: &GrainSettings) {
     }
 }
 
-
-pub(crate) fn apply_lut_in_place(img: &mut RgbaImage, lut_data: &[f32], size: u32, settings: &Lut3DSettings) {
+pub(crate) fn apply_lut_in_place(
+    img: &mut RgbaImage,
+    lut_data: &[f32],
+    size: u32,
+    settings: &Lut3DSettings,
+) {
     if settings.intensity <= 0.0 {
         return;
     }
@@ -475,7 +479,7 @@ pub(crate) fn apply_lut_in_place(img: &mut RgbaImage, lut_data: &[f32], size: u3
         let r0 = r_c.floor() as u32;
         let g0 = g_c.floor() as u32;
         let b0 = b_c.floor() as u32;
-        
+
         let r1 = (r0 + 1).min(size - 1);
         let g1 = (g0 + 1).min(size - 1);
         let b1 = (b0 + 1).min(size - 1);
@@ -487,12 +491,12 @@ pub(crate) fn apply_lut_in_place(img: &mut RgbaImage, lut_data: &[f32], size: u3
 
         let sample = |r, g, b| {
             let idx = ((b * size + g) * size + r) as usize * 3;
-            // .cube format is (size*size*size) lines. 
+            // .cube format is (size*size*size) lines.
             // Standard order: Red changes fastest, then Green, then Blue.
             // i.e. loop B, loop G, loop R.
             // Index = b * size*size + g * size + r.
             if idx + 2 < lut_data.len() {
-                [lut_data[idx], lut_data[idx+1], lut_data[idx+2]]
+                [lut_data[idx], lut_data[idx + 1], lut_data[idx + 2]]
             } else {
                 [r_in, g_in, b_in] // Fallback (shouldn't happen if size is correct)
             }
