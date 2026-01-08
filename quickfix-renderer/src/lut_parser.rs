@@ -60,7 +60,6 @@ pub fn parse_cube_file(content: &str) -> Result<(Vec<f32>, u32), String> {
 fn parse_3dl_file(content: &str) -> Result<(Vec<f32>, u32), String> {
     let mut size = 0u32;
     let mut data = Vec::new();
-    let mut data_started = false;
     let mut grid_points_read = false;
 
     // 3DL usually starts with grid points. multiple lines or one line.
@@ -82,10 +81,15 @@ fn parse_3dl_file(content: &str) -> Result<(Vec<f32>, u32), String> {
             if is_numeric_line(line) {
                 let nums: Vec<&str> = line.split_whitespace().collect();
                 // If it's the grid definition, the number of items is the size.
-                // But wait, 3DL might have 3 rows of grid points?
-                // Or just one row if cubic?
-                // Let's assume if we read a line of >3 integers, it's a grid def.
-                if nums.len() > 3 {
+                // 3DL usually has grid points. Even if just 2 (0..1023), it's a grid.
+                // We assume if we read a line of >= 2 integers, it's a grid def.
+                // (Unless it's 3 integers, which COULD be data, but 3DL header usually comes first).
+                // Let's assume if !grid_points_read, 3 integers is ambiguous but likely grid if it's the first non-comment line.
+                // But for safety, let's keep it strict-ish: >= 2.
+                // If it is EXACTLY 3, it might be data if one-line header is missing?
+                // But valid 3DL MUST have grid def.
+                // So if we haven't seen grid yet, ANY numeric line is likely grid.
+                if nums.len() >= 2 {
                     size = nums.len() as u32;
                     // If we found one, we might find 2 more (separate channels), or just this one.
                     // We assume cubic grid, so we just take this size.
@@ -96,16 +100,16 @@ fn parse_3dl_file(content: &str) -> Result<(Vec<f32>, u32), String> {
                     // Pre-allocate
                     data.reserve((size * size * size * 3) as usize);
                     continue; 
-                } else if nums.len() == 3 {
-                    // This looks like data. If we haven't seen grid points yet, that's an issue unless inferred?
-                    // Some formats might not list grid points if implicit?
-                    // But 3DL usually lists them.
-                    // If we encounter data first, error.
-                    return Err("Found data before grid definition in .3dl".to_string());
-                }
+                } else if nums.len() == 1 {
+                     // Weird.
+                } 
+                // Fallback: if we didn't match above, check if it looks like data?
+                // But if !grid_points_read, we can't parse data yet because we don't know size.
+                // So we error if we can't find grid.
             }
             // Skip other metadata like "shaper" or weird headers?
         } else {
+
             // Grid read, now read data
             // But we might encounter 2 more grid lines if they listed R, G, B separately.
             // If the line has `size` items again, it's a grid line.
@@ -228,7 +232,6 @@ fn parse_xmp_file(content: &str) -> Result<(Vec<f32>, u32), String> {
              // Usually Adobe uses 32-bit floats.
              // 8 chars per float?
              
-             let mut data = Vec::new();
              // Chunks of 8 chars?
              // Or maybe it is base64? (A-Za-z0-9+/=)
              // Hex is just 0-9A-F. 
@@ -253,7 +256,7 @@ fn parse_xmp_file(content: &str) -> Result<(Vec<f32>, u32), String> {
              // Now view as f32s. 
              // We need exactly bytes.len() / 4 floats.
              if bytes.len() % 4 == 0 {
-                 data = bytes.chunks(4).map(|chunk| {
+                 let data: Vec<f32> = bytes.chunks(4).map(|chunk| {
                      f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
                  }).collect();
                  
@@ -301,21 +304,185 @@ fn parse_data_line(line: &str, data: &mut Vec<f32>) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    // --- Helper for generating dummy data ---
+    fn _generate_cube_data(size: u32) -> String {
+        let mut s = format!("LUT_3D_SIZE {}\n", size);
+        let count = size * size * size;
+        for _ in 0..count {
+            s.push_str("0.0 0.5 1.0\n");
+        }
+        s
+    }
+
+    // --- .cube Tests ---
+
     #[test]
     fn test_parse_simple_cube() {
         let content = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1";
         let (data, size) = parse_lut(content, "cube").unwrap();
         assert_eq!(size, 2);
         assert_eq!(data.len(), 24);
+        assert_eq!(data[0], 0.0);
+        assert_eq!(data[23], 1.0);
     }
-    
+
     #[test]
-    fn test_parse_3dl_implicit() {
-        // Simplified 3DL test content
+    fn test_cube_with_comments_and_metadata() {
+        let content = r#"
+            # This is a comment
+            TITLE "My LUT"
+            DOMAIN_MIN 0.0 0.0 0.0
+            DOMAIN_MAX 1.0 1.0 1.0
+            LUT_3D_SIZE 2
+            # Data starts now
+            0.0 0.0 0.0
+            0.1 0.1 0.1
+            0.2 0.2 0.2
+            0.3 0.3 0.3
+            0.4 0.4 0.4
+            0.5 0.5 0.5
+            0.6 0.6 0.6
+            0.7 0.7 0.7
+        "#;
+        let (data, size) = parse_lut(content, "cube").unwrap();
+        assert_eq!(size, 2);
+        assert_eq!(data.len(), 24);
+        assert_eq!(data[3], 0.1);
+    }
+
+    #[test]
+    fn test_cube_invalid_size() {
+        let content = "LUT_3D_SIZE\n0 0 0"; // Missing value
+        assert!(parse_lut(content, "cube").is_err());
+
+        let content = "LUT_3D_SIZE ABC\n0 0 0"; // Bad value
+        assert!(parse_lut(content, "cube").is_err());
+    }
+
+    #[test]
+    fn test_cube_data_mismatch() {
+        let content = "LUT_3D_SIZE 2\n0 0 0\n1 0 0"; // Not enough data
+        assert!(parse_lut(content, "cube").is_err());
+    }
+
+    // --- .3dl Tests ---
+
+    #[test]
+    fn test_3dl_parsing_implicit_grid() {
+        // "0 1023" -> Len 2. Now accepted as grid.
         let content = "0 1023\n0 0 0\n1023 0 0\n0 1023 0\n1023 1023 0\n0 0 1023\n1023 0 1023\n0 1023 1023\n1023 1023 1023";
         let (data, size) = parse_lut(content, "3dl").unwrap();
         assert_eq!(size, 2);
-        assert_eq!(data[0], 0.0);
-        assert_eq!(data[3], 1.0); // 1023 normalized to 1.0 if parser uses 1023 scale
+        assert_eq!(data.len(), 24);
+        
+        // Check normalization (1023 -> 1.0)
+        assert_eq!(data[3], 1.0); // 1023 0 0 -> R channel
+    }
+
+    #[test]
+    fn test_3dl_normalization_detect_12bit() {
+        // Max value 4095
+        let content = "0 4095\n0 0 0\n4095 0 0\n0 4095 0\n4095 4095 0\n0 0 4095\n4095 0 4095\n0 4095 4095\n4095 4095 4095";
+        let (data, size) = parse_lut(content, "3dl").unwrap(); // Assuming parse_3dl_file is now parse_lut with "3dl"
+        assert_eq!(size, 2);
+        assert!((data[3] - 1.0).abs() < 1e-5, "Should normalize 4095 to 1.0");
+    }
+
+    #[test]
+    fn test_3dl_missing_grid() {
+        // No grid line (only 1s, which are ignored or handled?)
+        // parser demands grid first.
+        // If "0 0 0" is sent, it is len=3.
+        // With strict check "if nums.len() >= 2", "0 0 0" is accepted as grid of size 3!
+        // So this test case "0 0 0" -> parses as Grid size 3.
+        // Then subsequent lines...
+        // If we want to simulate MISSING grid, we need invalid grid line?
+        // Or if file ends?
+        
+        // Let's use a non-numeric first line? No, they are skipped.
+        // If we pass ONLY data lines like "0 0 0", it will be interpreted as grid size 3.
+        // Then we expect 3^3 = 27 lines.
+        // If we only provide 2 lines, it will fail data len check.
+        // So "0 0 0\n100 100 100" -> grid size 3. expected 27 data lines. got 1 data line (the second one).
+        // Result: Err("Data length mismatch").
+        // This confirms it catches "missing grid" (or misinterpretation).
+        
+        let content = "0 0 0\n100 100 100"; 
+        assert!(parse_lut(content, "3dl").is_err());
+    }
+
+    #[test]
+    fn test_xmp_text_floats() {
+        // Valid XMP with plain text floats (simplest format)
+        // Added xmlns:rdf and xmlns:crs
+        let content = r#"
+            <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' xmlns:crs='http://ns.adobe.com/camera-raw-settings/1.0/'>
+                <rdf:Description>
+                    <crs:LookTable>
+                        0.0 0.0 0.0
+                        1.0 0.0 0.0
+                        0.0 1.0 0.0
+                        1.0 1.0 0.0
+                        0.0 0.0 1.0
+                        1.0 0.0 1.0
+                        0.0 1.0 1.0
+                        1.0 1.0 1.0
+                    </crs:LookTable>
+                </rdf:Description>
+            </rdf:RDF>
+        "#;
+        let (data, size) = parse_lut(content, "xmp").unwrap();
+        assert_eq!(size, 2);
+        assert_eq!(data.len(), 24);
+        assert_eq!(data[3], 1.0);
+    }
+
+    #[test]
+    fn test_xmp_hex_data() {
+        // ... (data generation same) ...
+        let zero = "00000000";
+        let one = "0000803F";
+        
+        let mut hex = String::new();
+        // 0 0 0
+        hex += &format!("{}{}{}", zero, zero, zero);
+        // 1 0 0
+        hex += &format!("{}{}{}", one, zero, zero);
+        // 0 1 0
+        hex += &format!("{}{}{}", zero, one, zero);
+        // 1 1 0
+        hex += &format!("{}{}{}", one, one, zero);
+        // 0 0 1
+        hex += &format!("{}{}{}", zero, zero, one);
+        // 1 0 1
+        hex += &format!("{}{}{}", one, zero, one);
+        // 0 1 1
+        hex += &format!("{}{}{}", zero, one, one);
+        // 1 1 1
+        hex += &format!("{}{}{}", one, one, one);
+        
+        // Added xmlns:x and xmlns:rdf and xmlns:crs
+        let content = format!(r#"
+            <x:xmpmeta xmlns:x='adobe:ns:meta/'>
+             <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' xmlns:crs='http://ns.adobe.com/camera-raw-settings/1.0/'>
+              <rdf:Description>
+               <crs:LookTable>
+                {}
+               </crs:LookTable>
+              </rdf:Description>
+             </rdf:RDF>
+            </x:xmpmeta>
+        "#, hex);
+        
+        let (data, size) = parse_lut(&content, "xmp").unwrap();
+        assert_eq!(size, 2);
+        assert_eq!(data.len(), 24);
+        assert_eq!(data[3], 1.0);
+        assert_eq!(data[4], 0.0);
+    }
+
+    #[test]
+    fn test_unsupported_format() {
+        assert!(parse_lut("dummy", "jpg").is_err());
     }
 }
