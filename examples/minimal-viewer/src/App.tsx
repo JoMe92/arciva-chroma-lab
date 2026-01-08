@@ -398,7 +398,7 @@ function App() {
 
     render();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity]);
+  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity, denoiseLuminance, denoiseColor]);
 
   // Handle Canvas Click for WB Picking
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
