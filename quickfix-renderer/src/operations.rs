@@ -1,6 +1,6 @@
 use crate::{
-    ColorSettings, CropSettings, ExposureSettings, GeometrySettings, GrainSettings,
-    QuickFixAdjustments,
+    ColorSettings, CropSettings, DenoiseSettings, ExposureSettings, GeometrySettings,
+    GrainSettings, QuickFixAdjustments,
 };
 use image::{ImageBuffer, Rgba, RgbaImage};
 use rand::SeedableRng;
@@ -73,7 +73,12 @@ pub fn process_frame_internal(
         apply_lut_in_place(&mut img, lut_data, lut_size, lut_settings);
     }
 
-    // 6. Grain
+    // 6. Denoise
+    if let Some(denoise) = &adjustments.denoise {
+        apply_denoise_in_place(&mut img, denoise);
+    }
+
+    // 7. Grain
     if let Some(grain) = &adjustments.grain {
         apply_grain_in_place(&mut img, grain);
     }
@@ -469,6 +474,127 @@ fn apply_grain_in_place(img: &mut RgbaImage, settings: &GrainSettings) {
     }
 }
 
+fn apply_denoise_in_place(img: &mut RgbaImage, settings: &DenoiseSettings) {
+    if settings.luminance <= 0.0 && settings.color <= 0.0 {
+        return;
+    }
+
+    let (width, height) = img.dimensions();
+    let source = img.clone(); // Need source for reading neighbors
+
+    for y in 0..height {
+        for x in 0..width {
+            let cx = x as i32;
+            let cy = y as i32;
+
+            let center_px = source.get_pixel(x, y);
+            let center_rgb = [
+                center_px[0] as f32,
+                center_px[1] as f32,
+                center_px[2] as f32,
+            ];
+            let center_yuv = rgb_to_yuv(center_rgb);
+
+            let mut final_y = 0.0;
+            let mut weight_y = 0.0;
+
+            let mut final_u = 0.0;
+            let mut final_v = 0.0;
+            let mut weight_c = 0.0;
+
+            // Kernel size 5x5 (radius 2)
+            let radius = 2;
+            // Sigma parameters (approximate shader logic)
+            let sigma_s = 2.0;
+            let sigma_r = 0.4 * settings.luminance.max(0.001) * 255.0; // Scale to 0..255 range
+
+            for j in -radius..=radius {
+                for i in -radius..=radius {
+                    let nx = cx + i;
+                    let ny = cy + j;
+
+                    // Clamped lookup
+                    let px = if nx >= 0 && nx < width as i32 && ny >= 0 && ny < height as i32 {
+                        source.get_pixel(nx as u32, ny as u32)
+                    } else {
+                        // Clamp to edge
+                        let cnx = nx.max(0).min(width as i32 - 1);
+                        let cny = ny.max(0).min(height as i32 - 1);
+                        source.get_pixel(cnx as u32, cny as u32)
+                    };
+
+                    let rgb = [px[0] as f32, px[1] as f32, px[2] as f32];
+                    let yuv = rgb_to_yuv(rgb);
+
+                    let dist_sq = (i * i + j * j) as f32;
+                    let w_spatial = (-(dist_sq) / (2.0 * sigma_s * sigma_s)).exp();
+
+                    // Luminance: Bilateral
+                    if settings.luminance > 0.0 {
+                        let diff = (yuv[0] - center_yuv[0]).abs();
+                        let w_range = (-(diff * diff) / (2.0 * sigma_r * sigma_r)).exp();
+                        let w = w_spatial * w_range;
+                        final_y += yuv[0] * w;
+                        weight_y += w;
+                    }
+
+                    // Color: Spatial only
+                    if settings.color > 0.0 {
+                        final_u += yuv[1] * w_spatial;
+                        final_v += yuv[2] * w_spatial;
+                        weight_c += w_spatial;
+                    }
+                }
+            }
+
+            let out_y = if settings.luminance > 0.0 && weight_y > 0.0 {
+                final_y / weight_y
+            } else {
+                center_yuv[0]
+            };
+
+            let out_u = if settings.color > 0.0 && weight_c > 0.0 {
+                final_u / weight_c
+            } else {
+                center_yuv[1]
+            };
+
+            let out_v = if settings.color > 0.0 && weight_c > 0.0 {
+                final_v / weight_c
+            } else {
+                center_yuv[2]
+            };
+
+            let out_rgb = yuv_to_rgb([out_y, out_u, out_v]);
+            let res_px = Rgba([
+                clamp_u8(out_rgb[0]),
+                clamp_u8(out_rgb[1]),
+                clamp_u8(out_rgb[2]),
+                center_px[3],
+            ]);
+            img.put_pixel(x, y, res_px);
+        }
+    }
+}
+
+// Helpers
+fn rgb_to_yuv(rgb: [f32; 3]) -> [f32; 3] {
+    let y = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
+    let u = 0.492 * (rgb[2] - y);
+    let v = 0.877 * (rgb[0] - y);
+    [y, u, v]
+}
+
+fn yuv_to_rgb(yuv: [f32; 3]) -> [f32; 3] {
+    let y = yuv[0];
+    let u = yuv[1];
+    let v = yuv[2];
+    let r = y + 1.13983 * v;
+    let g = y - 0.39465 * u - 0.58060 * v;
+    let b = y + 2.03211 * u;
+    [r, g, b]
+}
+
 pub(crate) fn apply_lut_in_place(
     img: &mut RgbaImage,
     lut_data: &[f32],
@@ -784,5 +910,27 @@ mod tests {
         assert_eq!(hist[256 + 0], 2); // Green bin 0
         assert_eq!(hist[512 + 100], 2); // Blue bin 100
         assert_eq!(hist[0], 0); // Red bin 0 should be 0
+    }
+
+    #[test]
+    fn test_apply_denoise() {
+        // Create 3x3 image with a center outlier
+        let mut img = create_test_image(3, 3, [100, 100, 100, 255]);
+        // Set center pixel to bright
+        img.put_pixel(1, 1, Rgba([200, 100, 100, 255]));
+
+        let settings = DenoiseSettings {
+            luminance: 1.0, // Strong bilateral
+            color: 0.0,
+        };
+        apply_denoise_in_place(&mut img, &settings);
+
+        let center = img.get_pixel(1, 1);
+        // Bilateral should preserve edge if sigma_r is small, but if sigma_r is large (luminance=1.0)
+        // it should smooth it towards neighbors.
+        // Neighbors are 100. Center is 200.
+        // With high luminance denoise, center should drop significantly towards 100.
+        // Let's assert it changed significantly
+        assert!(center[0] < 195);
     }
 }

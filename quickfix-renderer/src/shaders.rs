@@ -48,7 +48,11 @@ struct Settings {
     src_height: f32,
 
     // LUT
-    lut_intensity: f32, 
+    lut_intensity: f32,
+    
+    // Denoise
+    denoise_luminance: f32,
+    denoise_color: f32, 
 };
 
 @group(0) @binding(0) var<uniform> settings: Settings;
@@ -124,6 +128,110 @@ fn sample_bicubic(uv: vec2<f32>) -> vec4<f32> {
         cubic_hermite(col_results[0].b, col_results[1].b, col_results[2].b, col_results[3].b, f.y),
         cubic_hermite(col_results[0].a, col_results[1].a, col_results[2].a, col_results[3].a, f.y)
     );
+}
+
+fn rgb_to_yuv(rgb: vec3<f32>) -> vec3<f32> {
+    let y = dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
+    let u = 0.492 * (rgb.b - y);
+    let v = 0.877 * (rgb.r - y);
+    return vec3<f32>(y, u, v);
+}
+
+fn yuv_to_rgb(yuv: vec3<f32>) -> vec3<f32> {
+    let y = yuv.x;
+    let u = yuv.y;
+    let v = yuv.z;
+    let r = y + 1.13983 * v;
+    let g = y - 0.39465 * u - 0.58060 * v;
+    let b = y + 2.03211 * u;
+    return vec3<f32>(r, g, b);
+}
+
+fn sample_denoised(uv: vec2<f32>) -> vec4<f32> {
+    // If no denoise, just sample
+    if (settings.denoise_luminance <= 0.0 && settings.denoise_color <= 0.0) {
+        return sample_bicubic(uv);
+    }
+    
+    let tex_size = vec2<f32>(settings.src_width, settings.src_height);
+    let step = 1.0 / tex_size;
+    
+    var center_col = sample_bicubic(uv);
+    var center_yuv = rgb_to_yuv(center_col.rgb);
+    
+    // Parameters
+    // Luma strength controls sigma_r (range) for bilateral
+    // Color strength controls sigma_s (spatial) for box/gaussian blur on Chroma
+    
+    // Using a 5x5 kernel
+    var final_y = 0.0;
+    var final_u = 0.0;
+    var final_v = 0.0;
+    var weight_total_y = 0.0;
+    var weight_total_c = 0.0;
+    
+    let sigma_s = 2.0; // Spatial sigma
+    
+    // Range sigma for Bilateral: related to denoise_luminance. 
+    // If denoise is high, sigma_r is high (more blurring across edges).
+    // If denoise is low, sigma_r is low (preserve edges strictly).
+    // Let's map 0..1 to sensible range. E.g. 0.01 to 0.3?
+    let sigma_r = max(0.001, settings.denoise_luminance * 0.4);
+    
+    // Chroma blur radius/strength
+    // For chroma, we just do spatial blur.
+    
+    for (var i = -2; i <= 2; i++) {
+        for (var j = -2; j <= 2; j++) {
+            let offset = vec2<f32>(f32(i), f32(j)) * step;
+            let sample_uv = clamp(uv + offset, vec2<f32>(0.0), vec2<f32>(1.0));
+            // Optimization: Use bilinear for neighbor samples to save perf
+            let col = textureSampleLevel(t_diffuse, s_diffuse, sample_uv, 0.0);
+            let yuv = rgb_to_yuv(col.rgb);
+            
+            // Spatial Filtering Weight (Gaussian)
+            let dist_sq = f32(i*i + j*j);
+            let w_spatial = exp(-dist_sq / (2.0 * sigma_s * sigma_s));
+            
+            // 1. Luminance (Bilateral)
+            let diff_y = abs(yuv.x - center_yuv.x);
+            let w_range = exp(-(diff_y * diff_y) / (2.0 * sigma_r * sigma_r));
+            let w_y = w_spatial * w_range;
+            
+            if (settings.denoise_luminance > 0.0) {
+                final_y += yuv.x * w_y;
+                weight_total_y += w_y;
+            } else {
+                // If luma denoise off, we just take center later, but let's accumulate
+                // to keep logic unified or just break?
+            }
+            
+            // 2. Color (Gaussian Blur on U/V)
+            // If denoise_color > 0, we use spatial weights.
+            if (settings.denoise_color > 0.0) {
+                 final_u += yuv.y * w_spatial;
+                 final_v += yuv.z * w_spatial;
+                 weight_total_c += w_spatial;
+            }
+        }
+    }
+    
+    var out_y = center_yuv.x;
+    var out_u = center_yuv.y;
+    var out_v = center_yuv.z;
+    
+    if (settings.denoise_luminance > 0.0 && weight_total_y > 0.0) {
+        out_y = final_y / weight_total_y;
+    }
+    
+    if (settings.denoise_color > 0.0 && weight_total_c > 0.0) {
+         out_u = final_u / weight_total_c;
+         out_v = final_v / weight_total_c;
+    }
+    
+    let out_rgb = yuv_to_rgb(vec3<f32>(out_y, out_u, out_v));
+    // Mix with original alpha
+    return vec4<f32>(out_rgb, center_col.a);
 }
 
 // Vertex Shader
@@ -244,7 +352,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Sample Texture
     // Use bicubic if enabled/needed, or bilinear for speed.
     // For now, let's use the bicubic function we wrote.
-    var color = sample_bicubic(uv);
+    var color = sample_denoised(uv);
     
     // 3. Exposure
     let exposure_factor = pow(2.0, settings.exposure);
@@ -393,6 +501,8 @@ uniform float u_grain_size;
 uniform vec2 u_src_size;
 uniform sampler3D u_lut;
 uniform float u_lut_intensity;
+uniform float u_denoise_luminance;
+uniform float u_denoise_color;
 
 // Helper: Cubic Hermite
 float cubic_hermite(float a, float b, float c, float d, float t) {
@@ -433,6 +543,87 @@ vec4 sample_bicubic(vec2 uv) {
         cubic_hermite(col_results[0].b, col_results[1].b, col_results[2].b, col_results[3].b, f.y),
         cubic_hermite(col_results[0].a, col_results[1].a, col_results[2].a, col_results[3].a, f.y)
     );
+}
+
+vec3 rgb_to_yuv(vec3 rgb) {
+    float y = dot(rgb, vec3(0.299, 0.587, 0.114));
+    float u = 0.492 * (rgb.b - y);
+    float v = 0.877 * (rgb.r - y);
+    return vec3(y, u, v);
+}
+
+vec3 yuv_to_rgb(vec3 yuv) {
+    float y = yuv.x;
+    float u = yuv.y;
+    float v = yuv.z;
+    float r = y + 1.13983 * v;
+    float g = y - 0.39465 * u - 0.58060 * v;
+    float b = y + 2.03211 * u;
+    return vec3(r, g, b);
+}
+
+vec4 sample_denoised(vec2 uv) {
+    if (u_denoise_luminance <= 0.0 && u_denoise_color <= 0.0) {
+        return sample_bicubic(uv);
+    }
+    
+    vec2 tex_size = u_src_size;
+    vec2 step = 1.0 / tex_size;
+    
+    vec4 center_col = sample_bicubic(uv);
+    vec3 center_yuv = rgb_to_yuv(center_col.rgb);
+    
+    float final_y = 0.0;
+    float final_u = 0.0;
+    float final_v = 0.0;
+    float weight_total_y = 0.0;
+    float weight_total_c = 0.0;
+    
+    float sigma_s = 2.0;
+    float sigma_r = max(0.001, u_denoise_luminance * 0.4);
+    
+    for (int i = -2; i <= 2; i++) {
+        for (int j = -2; j <= 2; j++) {
+            vec2 offset = vec2(float(i), float(j)) * step;
+            vec2 sample_uv = clamp(uv + offset, vec2(0.0), vec2(1.0));
+            
+            vec4 col = texture(u_texture, sample_uv);
+            vec3 yuv = rgb_to_yuv(col.rgb);
+            
+            float dist_sq = float(i*i + j*j);
+            float w_spatial = exp(-dist_sq / (2.0 * sigma_s * sigma_s));
+            
+            float diff_y = abs(yuv.x - center_yuv.x);
+            float w_range = exp(-(diff_y * diff_y) / (2.0 * sigma_r * sigma_r));
+            float w_y = w_spatial * w_range;
+            
+            if (u_denoise_luminance > 0.0) {
+                final_y += yuv.x * w_y;
+                weight_total_y += w_y;
+            }
+            
+            if (u_denoise_color > 0.0) {
+                final_u += yuv.y * w_spatial;
+                final_v += yuv.z * w_spatial;
+                weight_total_c += w_spatial;
+            }
+        }
+    }
+    
+    float out_y = center_yuv.x;
+    float out_u = center_yuv.y;
+    float out_v = center_yuv.z;
+    
+    if (u_denoise_luminance > 0.0 && weight_total_y > 0.0) {
+        out_y = final_y / weight_total_y;
+    }
+    
+    if (u_denoise_color > 0.0 && weight_total_c > 0.0) {
+        out_u = final_u / weight_total_c;
+        out_v = final_v / weight_total_c;
+    }
+    
+    return vec4(yuv_to_rgb(vec3(out_y, out_u, out_v)), center_col.a);
 }
 
 void main() {
@@ -493,7 +684,7 @@ void main() {
         return;
     }
     
-    vec4 color = sample_bicubic(uv);
+    vec4 color = sample_denoised(uv);
     
     // 3. Exposure
     float exposure_factor = pow(2.0, u_exposure);

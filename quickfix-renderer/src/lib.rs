@@ -114,12 +114,20 @@ pub struct GeometrySettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct DenoiseSettings {
+    pub luminance: f32,
+    pub color: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct QuickFixAdjustments {
     pub crop: Option<CropSettings>,
     pub exposure: Option<ExposureSettings>,
     pub color: Option<ColorSettings>,
     pub grain: Option<GrainSettings>,
     pub geometry: Option<GeometrySettings>,
+    pub denoise: Option<DenoiseSettings>,
     pub lut: Option<Lut3DSettings>,
 }
 
@@ -183,6 +191,11 @@ export interface GeometrySettings {
     flipHorizontal?: boolean;
 }
 
+export interface DenoiseSettings {
+    luminance: number;
+    color: number;
+}
+
 export interface Lut3DSettings {
     intensity: number;
 }
@@ -193,6 +206,7 @@ export interface QuickFixAdjustments {
     color?: ColorSettings;
     grain?: GrainSettings;
     geometry?: GeometrySettings;
+    denoise?: DenoiseSettings;
     lut?: Lut3DSettings;
 }
 "#;
@@ -479,6 +493,16 @@ mod tests {
         assert_eq!(adj.exposure.unwrap().exposure, Some(1.0));
         assert_eq!(adj.grain.as_ref().unwrap().amount, 0.5);
         assert_eq!(adj.grain.as_ref().unwrap().seed, Some(123));
+    }
+
+    #[test]
+    fn test_denoise_deserialization() {
+        let json = r#"{
+            "denoise": {"luminance": 0.5, "color": 0.7}
+        }"#;
+        let adj: QuickFixAdjustments = serde_json::from_str(json).unwrap();
+        assert_eq!(adj.denoise.as_ref().unwrap().luminance, 0.5);
+        assert_eq!(adj.denoise.as_ref().unwrap().color, 0.7);
     }
 
     #[test]

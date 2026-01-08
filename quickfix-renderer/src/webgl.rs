@@ -557,6 +557,18 @@ impl WebGlRenderer {
             _ => 1.0,
         };
         gl.uniform_1_f32(loc("u_grain_size").as_ref(), grain_size);
+        gl.uniform_1_f32(
+            loc("u_denoise_luminance").as_ref(),
+            settings
+                .denoise
+                .as_ref()
+                .map(|d| d.luminance)
+                .unwrap_or(0.0),
+        );
+        gl.uniform_1_f32(
+            loc("u_denoise_color").as_ref(),
+            settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
+        );
         gl.uniform_2_f32(loc("u_src_size").as_ref(), width as f32, height as f32);
 
         gl.viewport(0, 0, width as i32, height as i32);

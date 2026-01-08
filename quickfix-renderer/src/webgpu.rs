@@ -28,42 +28,44 @@ struct SettingsUniform {
     src_width: f32,
     src_height: f32,
     lut_intensity: f32,
-    _padding: f32, // Pad to 16 bytes alignment if needed.
-                   // Previous: 16 floats exactly?
-                   // geo (4), flip (4), crop_rot/asp/exp/cont (4), high/shad/temp/tint (4), grain/size/w/h (4).
-                   // Total 20 floats?
-                   // Let's recount.
-                   // Matrix (12 floats, 4 padding in aligned vec3 cols?) -> 48 bytes.
-                   // geo_padding (1) = 49th float? No matrix is separate.
-                   // Struct:
-                   // mat3x3 (48 bytes)
-                   // geo_padding (4 bytes) -> offset 52
-                   // flip_v (4) -> 56
-                   // flip_h (4) -> 60
-                   // crop_rot (4) -> 64
-                   // crop_asp (4) -> 68
-                   // exp (4) -> 72
-                   // cont (4) -> 76
-                   // high (4) -> 80
-                   // shad (4) -> 84
-                   // temp (4) -> 88
-                   // tint (4) -> 92
-                   // grain_amt (4) -> 96
-                   // grain_sz (4) -> 100
-                   // src_w (4) -> 104
-                   // src_h (4) -> 108
+    denoise_luminance: f32,
+    denoise_color: f32,
+    _padding: f32,
+    // Previous: 16 floats exactly?
+    // geo (4), flip (4), crop_rot/asp/exp/cont (4), high/shad/temp/tint (4), grain/size/w/h (4).
+    // Total 20 floats?
+    // Let's recount.
+    // Matrix (12 floats, 4 padding in aligned vec3 cols?) -> 48 bytes.
+    // geo_padding (1) = 49th float? No matrix is separate.
+    // Struct:
+    // mat3x3 (48 bytes)
+    // geo_padding (4 bytes) -> offset 52
+    // flip_v (4) -> 56
+    // flip_h (4) -> 60
+    // crop_rot (4) -> 64
+    // crop_asp (4) -> 68
+    // exp (4) -> 72
+    // cont (4) -> 76
+    // high (4) -> 80
+    // shad (4) -> 84
+    // temp (4) -> 88
+    // tint (4) -> 92
+    // grain_amt (4) -> 96
+    // grain_sz (4) -> 100
+    // src_w (4) -> 104
+    // src_h (4) -> 108
 
-                   // Now adding lut_intensity.
-                   // lut_int (4) -> 112
-                   // Struct alignment usually 16 bytes for uniform buffers.
-                   // 112 is divisible by 16 (112 = 16 * 7).
-                   // So we are good?
-                   // Let's add padding just in case to match WGSL explicitly if needed, but WGSL is packed?
-                   // WGSL `Settings` struct:
-                   // ... src_width, src_height;
-                   // lut_intensity;
-                   // };
-                   // WGSL struct size is implicitly padded to 16 bytes at end.
+    // Now adding lut_intensity.
+    // lut_int (4) -> 112
+    // Struct alignment usually 16 bytes for uniform buffers.
+    // 112 is divisible by 16 (112 = 16 * 7).
+    // So we are good?
+    // Let's add padding just in case to match WGSL explicitly if needed, but WGSL is packed?
+    // WGSL `Settings` struct:
+    // ... src_width, src_height;
+    // lut_intensity;
+    // };
+    // WGSL struct size is implicitly padded to 16 bytes at end.
 }
 
 pub struct WebGpuRenderer {
@@ -533,6 +535,12 @@ impl Renderer for WebGpuRenderer {
             } else {
                 0.0
             },
+            denoise_luminance: settings
+                .denoise
+                .as_ref()
+                .map(|d| d.luminance)
+                .unwrap_or(0.0),
+            denoise_color: settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
             _padding: 0.0,
         };
 
@@ -879,6 +887,12 @@ impl Renderer for WebGpuRenderer {
             src_width: width as f32,
             src_height: height as f32,
             lut_intensity: settings.lut.as_ref().map(|l| l.intensity).unwrap_or(0.0),
+            denoise_luminance: settings
+                .denoise
+                .as_ref()
+                .map(|d| d.luminance)
+                .unwrap_or(0.0),
+            denoise_color: settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
             _padding: 0.0,
         };
 

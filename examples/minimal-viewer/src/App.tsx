@@ -93,6 +93,10 @@ function App() {
   const [lutIntensity, setLutIntensity] = useState(1.0);
   const [lutName, setLutName] = useState<string | null>(null);
 
+  // Denoise
+  const [denoiseLuminance, setDenoiseLuminance] = useState(0);
+  const [denoiseColor, setDenoiseColor] = useState(0);
+
   // Interaction State
   const [isPickingWB, setIsPickingWB] = useState(false);
 
@@ -282,6 +286,7 @@ function App() {
         color: { temperature: temp, tint },
         grain: { amount: grainAmount, size: grainSize },
         lut: { intensity: lutIntensity }, // New
+        denoise: { luminance: denoiseLuminance, color: denoiseColor },
         crop: {
           rotation,
           // Only send rect if it is APPLIED. Otherwise send undefined (full image).
@@ -393,7 +398,7 @@ function App() {
 
     render();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity]);
+  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity, denoiseLuminance, denoiseColor]);
 
   // Handle Canvas Click for WB Picking
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -554,6 +559,13 @@ function App() {
             <option value="medium">Medium</option>
             <option value="coarse">Coarse</option>
           </select>
+
+          <h3>Denoise</h3>
+          <label>Luminance Noise: {denoiseLuminance}</label>
+          <input type="range" min="0" max="1" step="0.05" value={denoiseLuminance} onChange={e => setDenoiseLuminance(parseFloat(e.target.value))} />
+
+          <label>Color Noise: {denoiseColor}</label>
+          <input type="range" min="0" max="1" step="0.05" value={denoiseColor} onChange={e => setDenoiseColor(parseFloat(e.target.value))} />
 
           <h3>LUT</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
