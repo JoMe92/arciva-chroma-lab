@@ -9,7 +9,7 @@ export type WorkerMessage =
     | { type: 'RENDER'; payload: { imageData?: ImageBitmap | ArrayBuffer; width: number; height: number; adjustments: QuickFixAdjustments; requestId: number } }
     | { type: 'CANCEL'; payload: { requestId: number } }
     | { type: 'DISPOSE' }
-    | { type: 'UPLOAD_LUT'; payload: { content: string } };
+    | { type: 'UPLOAD_LUT'; payload: { content: string; extension: string } };
 
 /**
  * Messages sent from the Worker back to the Main Thread (Client).

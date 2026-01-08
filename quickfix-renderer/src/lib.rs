@@ -45,7 +45,13 @@ struct LutResult {
 
 #[wasm_bindgen]
 pub fn parse_cube_lut(content: &str) -> Result<JsValue, JsValue> {
-    let (data, size) = lut_parser::parse_cube_file(content).map_err(|e| JsValue::from_str(&e))?;
+    // Legacy support or default to .cube
+    parse_lut(content, "cube")
+}
+
+#[wasm_bindgen]
+pub fn parse_lut(content: &str, ext: &str) -> Result<JsValue, JsValue> {
+    let (data, size) = lut_parser::parse_lut(content, ext).map_err(|e| JsValue::from_str(&e))?;
     let res = LutResult { data, size };
     Ok(serde_wasm_bindgen::to_value(&res)?)
 }

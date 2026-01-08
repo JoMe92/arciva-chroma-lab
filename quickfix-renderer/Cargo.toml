@@ -35,6 +35,7 @@ bytemuck = { version = "1.14", features = ["derive"] }
 js-sys = "0.3"
 thiserror = "1.0"
 async-trait = "0.1"
+roxmltree = "0.21.1"
 
 [dependencies.web-sys]
 version = "0.3"

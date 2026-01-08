@@ -79,10 +79,12 @@ function App() {
     // Since this is inside App component, we can assume imports are available or use valid import.
     // We can assume imports are available or use valid import.
 
+    const extension = file.name.split('.').pop() || '';
+
     try {
       if (clientRef.current) {
         console.log("App: Uploading LUT content string to worker...");
-        await clientRef.current.uploadLut(text);
+        await clientRef.current.uploadLut(text, extension);
         setLutName(file.name);
         console.log("App: LUT uploaded");
       }
@@ -417,7 +419,7 @@ function App() {
 
           <h3>LUT</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-            <input type="file" accept=".cube" onChange={handleLutUpload} />
+            <input type="file" accept=".cube,.3dl,.xmp,.xml" onChange={handleLutUpload} />
             {lutName && <span style={{ fontSize: '0.8em', color: 'green' }}>Loaded: {lutName}</span>}
             <label>Intensity: {lutIntensity}</label>
             <input type="range" min="0" max="1" step="0.05" value={lutIntensity} onChange={e => setLutIntensity(parseFloat(e.target.value))} />

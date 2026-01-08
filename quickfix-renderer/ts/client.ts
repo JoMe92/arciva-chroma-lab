@@ -102,10 +102,10 @@ export class QuickFixClient {
      * Uploads a raw .cube file content to the worker for parsing and application.
      * @param content - The text content of the .cube file.
      */
-    async uploadLut(content: string): Promise<void> {
+    async uploadLut(content: string, extension: string): Promise<void> {
         this.worker.postMessage({
             type: 'UPLOAD_LUT',
-            payload: { content }
+            payload: { content, extension }
         } as WorkerMessage);
     }
 
