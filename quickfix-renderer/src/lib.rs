@@ -208,7 +208,7 @@ pub struct FrameResult {
     data: Vec<u8>,
     pub width: u32,
     pub height: u32,
-    pub histogram: Vec<u32>,
+    histogram: Vec<u32>,
 }
 
 #[wasm_bindgen]
@@ -233,8 +233,9 @@ pub fn process_frame_sync(
 ) -> Result<FrameResult, JsValue> {
     let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
     // Sync version does not support LUT for now
-    let (data, w, h, histogram) = operations::process_frame_internal(data, width, height, &adjustments, None)
-        .map_err(|e| JsValue::from_str(&e))?;
+    let (data, w, h, histogram) =
+        operations::process_frame_internal(data, width, height, &adjustments, None)
+            .map_err(|e| JsValue::from_str(&e))?;
 
     Ok(FrameResult {
         data,
@@ -287,9 +288,6 @@ impl Renderer for CpuRenderer {
         canvas: &web_sys::HtmlCanvasElement,
     ) -> Result<(), RendererError> {
         let mut data_vec = data.to_vec();
-        // Pass LUT data if available
-        let lut_ref = self.lut.as_ref().map(|(d, s)| (d.as_slice(), *s));
-
         // Pass LUT data if available
         let lut_ref = self.lut.as_ref().map(|(d, s)| (d.as_slice(), *s));
 
@@ -417,7 +415,6 @@ impl QuickFixRenderer {
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        Ok(FrameResult {
         Ok(FrameResult {
             data: result_data,
             width,
