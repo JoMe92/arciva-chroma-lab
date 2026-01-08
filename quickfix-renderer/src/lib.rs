@@ -208,6 +208,7 @@ pub struct FrameResult {
     data: Vec<u8>,
     pub width: u32,
     pub height: u32,
+    pub histogram: Vec<u32>,
 }
 
 #[wasm_bindgen]
@@ -215,6 +216,10 @@ impl FrameResult {
     #[wasm_bindgen(getter)]
     pub fn data(&self) -> Vec<u8> {
         self.data.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn histogram(&self) -> Vec<u32> {
+        self.histogram.clone()
     }
 }
 
@@ -228,13 +233,14 @@ pub fn process_frame_sync(
 ) -> Result<FrameResult, JsValue> {
     let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
     // Sync version does not support LUT for now
-    let (data, w, h) = operations::process_frame_internal(data, width, height, &adjustments, None)
+    let (data, w, h, histogram) = operations::process_frame_internal(data, width, height, &adjustments, None)
         .map_err(|e| JsValue::from_str(&e))?;
 
     Ok(FrameResult {
         data,
         width: w,
         height: h,
+        histogram,
     })
 }
 
@@ -260,17 +266,17 @@ impl Renderer for CpuRenderer {
         width: u32,
         height: u32,
         settings: &QuickFixAdjustments,
-    ) -> Result<Vec<u8>, RendererError> {
+    ) -> Result<(Vec<u8>, Vec<u32>), RendererError> {
         // We need to copy data because process_frame_internal takes &mut [u8]
         let mut data_vec = data.to_vec();
 
         // Pass LUT data if available
         let lut_ref = self.lut.as_ref().map(|(d, s)| (d.as_slice(), *s));
 
-        let (res, _, _) =
+        let (res, _, _, histogram) =
             operations::process_frame_internal(&mut data_vec, width, height, settings, lut_ref)
                 .map_err(RendererError::RenderFailed)?;
-        Ok(res)
+        Ok((res, histogram))
     }
     async fn render_to_canvas(
         &mut self,
@@ -284,7 +290,10 @@ impl Renderer for CpuRenderer {
         // Pass LUT data if available
         let lut_ref = self.lut.as_ref().map(|(d, s)| (d.as_slice(), *s));
 
-        let (res, w, h) =
+        // Pass LUT data if available
+        let lut_ref = self.lut.as_ref().map(|(d, s)| (d.as_slice(), *s));
+
+        let (res, w, h, _) =
             operations::process_frame_internal(&mut data_vec, width, height, settings, lut_ref)
                 .map_err(RendererError::RenderFailed)?;
 
@@ -402,16 +411,18 @@ impl QuickFixRenderer {
             .into(),
         );
 
-        let result = self
+        let (result_data, histogram) = self
             .renderer
             .render(data, width, height, &adjustments)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
         Ok(FrameResult {
-            data: result,
+        Ok(FrameResult {
+            data: result_data,
             width,
             height,
+            histogram,
         })
     }
 

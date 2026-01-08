@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { QuickFixClient } from '../../../quickfix-renderer/pkg/client.js';
 import { RendererOptions } from 'quickfix-renderer';
+import { Histogram } from './Histogram';
 
 // Ported from geometry.rs to avoid WASM init on main thread
 function getOpaqueCrop(rotationDegrees: number, width: number, height: number) {
@@ -53,6 +54,7 @@ function App() {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [imageData, setImageData] = useState<Uint8Array | null>(null);
   const [isRendering, setIsRendering] = useState(false);
+  const [histogramData, setHistogramData] = useState<number[]>([]);
 
   // Settings
   const [exposure, setExposure] = useState(0);
@@ -275,7 +277,10 @@ function App() {
           settings
         );
 
-        const { imageBitmap, width, height } = res;
+        const { imageBitmap, width, height, histogram } = res;
+        if (histogram) {
+          setHistogramData(histogram);
+        }
 
         const ctx = canvasRef.current!.getContext('2d');
         if (ctx) {
@@ -478,6 +483,11 @@ function App() {
               </pre>
             </div>
           )}
+
+          <div style={{ marginTop: '1rem', borderTop: '1px solid #eee', paddingTop: '0.5rem' }}>
+            <h3>Histogram</h3>
+            <Histogram data={histogramData} />
+          </div>
 
           <div style={{ marginTop: '1rem', borderTop: '1px solid #eee', paddingTop: '0.5rem' }}>
             <h4>Debug Info</h4>

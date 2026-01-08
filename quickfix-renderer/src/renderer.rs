@@ -25,7 +25,7 @@ pub trait Renderer {
         width: u32,
         height: u32,
         settings: &QuickFixAdjustments,
-    ) -> Result<Vec<u8>, RendererError>;
+    ) -> Result<(Vec<u8>, Vec<u32>), RendererError>;
 
     /// Render directly to a canvas (if applicable)
     /// This is useful for the preview path to avoid readback
