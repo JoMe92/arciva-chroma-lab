@@ -162,7 +162,6 @@ describe('App Integration', () => {
         await waitFor(() => {
             const tempVal = parseFloat(tempInput.value);
             const tintVal = parseFloat(tintInput.value);
-            console.log(`Temp: ${tempVal}, Tint: ${tintVal}`);
 
             // Expected: Temp ~ -0.57, Tint ~ -0.45
             expect(tempVal).toBeCloseTo(-0.57, 1);
@@ -172,5 +171,35 @@ describe('App Integration', () => {
         // 8. Verify mode reset
         expect(pickButton).toHaveTextContent(/Pick Neutral Gray/i);
         expect(canvas).toHaveStyle({ cursor: 'default' });
+    });
+
+    it('cancels picker when rotation changes', async () => {
+        render(<App />);
+
+        // Wait for load
+        await waitFor(() => {
+            const backendElements = screen.getAllByText(/Backend/i);
+            expect(backendElements.length).toBeGreaterThan(0);
+        });
+
+        const pickButton = screen.getByText(/Pick Neutral Gray/i);
+
+        // Enable picker
+        fireEvent.click(pickButton);
+        expect(pickButton).toHaveTextContent(/Cancel Picker/i);
+
+        // Find Rotation slider
+        const rotationSlider = screen.getByTestId('rotation-slider');
+
+        // Change rotation
+        fireEvent.change(rotationSlider, { target: { value: '5' } });
+
+        // Verify picker is cancelled (text changes back)
+        await waitFor(() => {
+            expect(pickButton).toHaveTextContent(/Pick Neutral Gray/i);
+        });
+
+        // Also verify the button is now disabled
+        expect(pickButton).toBeDisabled();
     });
 });

@@ -169,6 +169,15 @@ function App() {
     }
   }, [rotation, autoCrop, image]);
 
+  // Auto-cancel WB Picker if Geometry/Rotation changes
+  useEffect(() => {
+    if (isPickingWB) {
+      if (Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0) {
+        setIsPickingWB(false);
+      }
+    }
+  }, [rotation, geoVertical, geoHorizontal, isPickingWB]);
+
 
   // Initialize Client
   useEffect(() => {
@@ -388,7 +397,15 @@ function App() {
 
   // Handle Canvas Click for WB Picking
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // Guard: Basic checks
     if (!isPickingWB || !imageData || !image || !canvasRef.current) return;
+
+    // Guard: Geometry must be neutral (Rotation/Perspective makes mapping complex)
+    if (Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0) {
+      console.warn("WB Picker: Cannot pick with active geometry transforms.");
+      setIsPickingWB(false);
+      return;
+    }
 
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -548,7 +565,7 @@ function App() {
 
           <h3>Geometry</h3>
           <label>Rotation: {rotation}</label>
-          <input type="range" min="-45" max="45" step="1" value={rotation} onChange={e => setRotation(parseFloat(e.target.value))} />
+          <input data-testid="rotation-slider" type="range" min="-45" max="45" step="1" value={rotation} onChange={e => setRotation(parseFloat(e.target.value))} />
 
           <label>
             <input type="checkbox" checked={autoCrop} onChange={e => setAutoCrop(e.target.checked)} />
