@@ -3,7 +3,7 @@
  * Manages the WASM renderer instance and handles messages from the main thread.
  */
 
-import init, { QuickFixRenderer, init_panic_hook, RendererOptions } from '../pkg/quickfix_renderer';
+import init, { QuickFixRenderer, init_panic_hook, RendererOptions, parse_cube_lut } from '../pkg/quickfix_renderer';
 import { WorkerMessage, WorkerResponse } from './protocol';
 
 const ctx: DedicatedWorkerGlobalScope = self as any;
@@ -64,6 +64,19 @@ ctx.onmessage = async (e: MessageEvent<WorkerMessage>) => {
                     sourceImage = new Uint8Array(newImage as ArrayBuffer);
                 }
                 // console.log("Worker: Image set", w, h);
+                break;
+
+            case 'UPLOAD_LUT':
+                if (!renderer) throw new Error("Renderer not initialized");
+                try {
+                    const content = msg.payload.content;
+                    const lutResult = parse_cube_lut(content);
+                    await renderer.set_lut(lutResult);
+                    // console.log("Worker: LUT parsed and set");
+                } catch (e) {
+                    console.error("Worker: Failed to parse/set LUT", e);
+                    throw e;
+                }
                 break;
 
             case 'RENDER':

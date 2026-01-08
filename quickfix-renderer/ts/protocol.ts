@@ -8,7 +8,8 @@ export type WorkerMessage =
     | { type: 'SET_IMAGE'; payload: { imageData: ImageBitmap | ArrayBuffer; width: number; height: number } }
     | { type: 'RENDER'; payload: { imageData?: ImageBitmap | ArrayBuffer; width: number; height: number; adjustments: QuickFixAdjustments; requestId: number } }
     | { type: 'CANCEL'; payload: { requestId: number } }
-    | { type: 'DISPOSE' };
+    | { type: 'DISPOSE' }
+    | { type: 'UPLOAD_LUT'; payload: { content: string } };
 
 /**
  * Messages sent from the Worker back to the Main Thread (Client).

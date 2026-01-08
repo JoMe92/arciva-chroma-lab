@@ -27,16 +27,43 @@ struct SettingsUniform {
     grain_size: f32,
     src_width: f32,
     src_height: f32,
-    // _padding: [f32; 0],
-    // Warning: Pod requires size to be valid. [f32; 0] is size 0.
-    // Let's remove _padding if it's exact.
-    // But verify:
-    // geo_v, geo_h, flip_v, flip_h (4)
-    // crop_rot, crop_asp, exp, cont (4)
-    // high, shad, temp, tint (4)
-    // grain_amt, grain_sz, src_w, src_h (4)
-    // Total 16 floats.
-    // Remove padding field.
+    lut_intensity: f32,
+    _padding: f32, // Pad to 16 bytes alignment if needed. 
+    // Previous: 16 floats exactly?
+    // geo (4), flip (4), crop_rot/asp/exp/cont (4), high/shad/temp/tint (4), grain/size/w/h (4).
+    // Total 20 floats?
+    // Let's recount.
+    // Matrix (12 floats, 4 padding in aligned vec3 cols?) -> 48 bytes.
+    // geo_padding (1) = 49th float? No matrix is separate.
+    // Struct:
+    // mat3x3 (48 bytes)
+    // geo_padding (4 bytes) -> offset 52
+    // flip_v (4) -> 56
+    // flip_h (4) -> 60
+    // crop_rot (4) -> 64
+    // crop_asp (4) -> 68
+    // exp (4) -> 72
+    // cont (4) -> 76
+    // high (4) -> 80
+    // shad (4) -> 84
+    // temp (4) -> 88
+    // tint (4) -> 92
+    // grain_amt (4) -> 96
+    // grain_sz (4) -> 100
+    // src_w (4) -> 104
+    // src_h (4) -> 108
+    
+    // Now adding lut_intensity.
+    // lut_int (4) -> 112
+    // Struct alignment usually 16 bytes for uniform buffers.
+    // 112 is divisible by 16 (112 = 16 * 7).
+    // So we are good?
+    // Let's add padding just in case to match WGSL explicitly if needed, but WGSL is packed?
+    // WGSL `Settings` struct:
+    // ... src_width, src_height;
+    // lut_intensity;
+    // };
+    // WGSL struct size is implicitly padded to 16 bytes at end.
 }
 
 pub struct WebGpuRenderer {
@@ -48,6 +75,9 @@ pub struct WebGpuRenderer {
     bind_group_layout: Option<wgpu::BindGroupLayout>,
     grain_texture: Option<wgpu::Texture>,
     grain_sampler: Option<wgpu::Sampler>,
+    lut_texture: Option<wgpu::Texture>,
+    lut_sampler: Option<wgpu::Sampler>,
+    default_lut_texture: Option<wgpu::Texture>,
 }
 
 impl Default for WebGpuRenderer {
@@ -67,6 +97,9 @@ impl WebGpuRenderer {
             bind_group_layout: None,
             grain_texture: None,
             grain_sampler: None,
+            lut_texture: None,
+            lut_sampler: None,
+            default_lut_texture: None,
         }
     }
 
@@ -148,6 +181,24 @@ impl WebGpuRenderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // LUT Texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // LUT Sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
 
@@ -190,16 +241,9 @@ impl WebGpuRenderer {
         // Create Grain Texture (Pre-seeded noise)
         // 256x256 noise texture
         let grain_size = 256;
-        let mut rng = rand::thread_rng(); // Or seeded if we want deterministic across sessions, but implementation plan said "pre-generated".
-                                          // Actually, we should use the same seed logic as CPU if we want exact parity, but for grain texture we just need a good noise source.
-                                          // The implementation plan said "Grain noise will be pre-generated on the CPU ... and uploaded".
-                                          // Let's generate it here.
+        let mut rng = rand::thread_rng();
         use rand_distr::{Distribution, Normal};
-        let normal = Normal::new(0.5, 0.15).unwrap(); // Mean 0.5, sigma 0.15 (so +/- 3 sigma fits in 0..1 roughly)
-                                                      // Wait, shader expects (val - 0.5) * 2.0 to get -1..1.
-                                                      // So we want 0.5 + N(0, 1) * scale?
-                                                      // Let's just generate uniform random for now? No, grain looks better with Gaussian.
-                                                      // Let's generate Gaussian centered at 0.5.
+        let normal = Normal::new(0.5, 0.15).unwrap();
 
         let mut grain_data = Vec::with_capacity(grain_size * grain_size * 4);
         for _ in 0..(grain_size * grain_size) {
@@ -239,6 +283,40 @@ impl WebGpuRenderer {
             ..Default::default()
         });
 
+        // Default LUT (Identity 2x2x2 or just 1x1x1?)
+        // 1x1x1 is fine if we don't sample it (intensity 0)
+        let default_lut_size = 1;
+        let default_lut_data = [0, 0, 0, 255]; // Black
+        let default_lut_texture = device.create_texture_with_data(
+            &queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Default LUT"),
+                size: wgpu::Extent3d {
+                    width: default_lut_size,
+                    height: default_lut_size,
+                    depth_or_array_layers: default_lut_size,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D3,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &default_lut_data,
+        );
+
+        let lut_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("LUT Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         self.adapter = Some(adapter);
         self.device = Some(device);
         self.queue = Some(queue);
@@ -246,6 +324,8 @@ impl WebGpuRenderer {
         self.bind_group_layout = Some(bind_group_layout);
         self.grain_texture = Some(grain_texture);
         self.grain_sampler = Some(grain_sampler);
+        self.default_lut_texture = Some(default_lut_texture);
+        self.lut_sampler = Some(lut_sampler);
 
         Ok(())
     }
@@ -255,6 +335,48 @@ impl WebGpuRenderer {
 impl Renderer for WebGpuRenderer {
     async fn init(&mut self) -> Result<(), RendererError> {
         self.ensure_initialized().await
+    }
+
+    async fn set_lut(&mut self, data: &[f32], size: u32) -> Result<(), RendererError> {
+        self.ensure_initialized().await?;
+        let device = self.device.as_ref().unwrap();
+        let queue = self.queue.as_ref().unwrap();
+
+        // Convert f32 RGB to u8 RGBA
+        // Data is size*size*size * 3 floats.
+        // We need size*size*size * 4 bytes.
+        let num_pixels = (size * size * size) as usize;
+        let mut texture_data = Vec::with_capacity(num_pixels * 4);
+
+        for chunk in data.chunks(3) {
+            let r = (chunk[0].clamp(0.0, 1.0) * 255.0) as u8;
+            let g = (chunk[1].clamp(0.0, 1.0) * 255.0) as u8;
+            let b = (chunk[2].clamp(0.0, 1.0) * 255.0) as u8;
+            texture_data.extend_from_slice(&[r, g, b, 255]);
+        }
+
+        let texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("LUT Texture"),
+                size: wgpu::Extent3d {
+                    width: size,
+                    height: size,
+                    depth_or_array_layers: size,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D3,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &texture_data,
+        );
+
+        self.lut_texture = Some(texture);
+        Ok(())
     }
 
     async fn render(
@@ -332,9 +454,6 @@ impl Renderer for WebGpuRenderer {
         let h = crate::geometry::calculate_homography_from_unit_square(&corners); // [f32; 9]
 
         // Pack into 3 vec4s for std140 layout
-        // Col 0: h[0], h[1], h[2], pad
-        // Col 1: h[3], h[4], h[5], pad
-        // Col 2: h[6], h[7], h[8], pad
         let mat = [
             [h[0], h[1], h[2], 0.0],
             [h[3], h[4], h[5], 0.0],
@@ -409,6 +528,8 @@ impl Renderer for WebGpuRenderer {
             },
             src_width: width as f32,
             src_height: height as f32,
+            lut_intensity: settings.lut.as_ref().map(|l| l.intensity).unwrap_or(0.0),
+            _padding: 0.0,
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -418,7 +539,12 @@ impl Renderer for WebGpuRenderer {
         });
 
         // Bind Group
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let lut_view = self.lut_texture.as_ref()
+            .or(self.default_lut_texture.as_ref())
+            .unwrap()
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Bind Group"),
             layout: bind_group_layout,
             entries: &[
@@ -447,6 +573,14 @@ impl Renderer for WebGpuRenderer {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(self.grain_sampler.as_ref().unwrap()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&lut_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(self.lut_sampler.as_ref().unwrap()),
                 },
             ],
         });
@@ -737,6 +871,8 @@ impl Renderer for WebGpuRenderer {
             },
             src_width: width as f32,
             src_height: height as f32,
+            lut_intensity: settings.lut.as_ref().map(|l| l.intensity).unwrap_or(0.0),
+            _padding: 0.0,
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -746,6 +882,11 @@ impl Renderer for WebGpuRenderer {
         });
 
         // Bind Group
+        let lut_view = self.lut_texture.as_ref()
+            .or(self.default_lut_texture.as_ref())
+            .unwrap()
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Bind Group"),
             layout: bind_group_layout,
@@ -775,6 +916,14 @@ impl Renderer for WebGpuRenderer {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(self.grain_sampler.as_ref().unwrap()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&lut_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(self.lut_sampler.as_ref().unwrap()),
                 },
             ],
         });

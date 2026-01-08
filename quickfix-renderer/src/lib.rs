@@ -7,6 +7,7 @@ pub mod geometry;
 pub mod operations;
 pub mod renderer;
 pub mod shaders;
+pub mod lut_parser;
 #[cfg(target_arch = "wasm32")]
 pub mod webgl;
 #[cfg(target_arch = "wasm32")]
@@ -32,6 +33,21 @@ pub struct CropRect {
 pub fn get_opaque_crop(rotation_deg: f32, width: f32, height: f32) -> JsValue {
     let rect = calculate_opaque_crop_rect(rotation_deg, width, height);
     serde_wasm_bindgen::to_value(&rect).unwrap()
+}
+
+use crate::api_types::Lut3DSettings;
+
+#[derive(Serialize, Deserialize)]
+struct LutResult {
+    data: Vec<f32>,
+    size: u32,
+}
+
+#[wasm_bindgen]
+pub fn parse_cube_lut(content: &str) -> Result<JsValue, JsValue> {
+    let (data, size) = lut_parser::parse_cube_file(content).map_err(|e| JsValue::from_str(&e))?;
+    let res = LutResult { data, size };
+    Ok(serde_wasm_bindgen::to_value(&res)?)
 }
 
 pub fn calculate_opaque_crop_rect(rotation_deg: f32, width: f32, height: f32) -> CropRect {
@@ -98,6 +114,7 @@ pub struct QuickFixAdjustments {
     pub color: Option<ColorSettings>,
     pub grain: Option<GrainSettings>,
     pub geometry: Option<GeometrySettings>,
+    pub lut: Option<Lut3DSettings>,
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -107,6 +124,22 @@ export interface CropRect {
     y: number;
     width: number;
     height: number;
+}
+
+export interface LutResult {
+    data: Float32Array;
+    size: number;
+}
+
+export function parse_cube_lut(content: string): LutResult;
+
+export class QuickFixRenderer {
+  free(): void;
+  static init(options?: RendererOptions): Promise<QuickFixRenderer>;
+  backend: string;
+  process_frame(data: Uint8Array, width: number, height: number, adjustments: QuickFixAdjustments, options?: ProcessOptions): Promise<FrameResult>;
+  render_to_canvas(data: Uint8Array, width: number, height: number, adjustments: QuickFixAdjustments, canvas: HTMLCanvasElement): Promise<void>;
+  set_lut(lut: LutResult): Promise<void>;
 }
 
 export function get_opaque_crop(rotation_deg: number, width: number, height: number): CropRect;
@@ -144,12 +177,17 @@ export interface GeometrySettings {
     flipHorizontal?: boolean;
 }
 
+export interface Lut3DSettings {
+    intensity: number;
+}
+
 export interface QuickFixAdjustments {
     crop?: CropSettings;
     exposure?: ExposureSettings;
     color?: ColorSettings;
     grain?: GrainSettings;
     geometry?: GeometrySettings;
+    lut?: Lut3DSettings;
 }
 "#;
 
@@ -183,7 +221,8 @@ pub fn process_frame_sync(
     adjustments: JsValue,
 ) -> Result<FrameResult, JsValue> {
     let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
-    let (data, w, h) = operations::process_frame_internal(data, width, height, &adjustments)
+    // Sync version does not support LUT for now
+    let (data, w, h) = operations::process_frame_internal(data, width, height, &adjustments, None)
         .map_err(|e| JsValue::from_str(&e))?;
 
     Ok(FrameResult {
@@ -194,12 +233,21 @@ pub fn process_frame_sync(
 }
 
 // CPU Renderer wrapper to fit Renderer trait
-struct CpuRenderer;
+struct CpuRenderer {
+    lut: Option<(Vec<f32>, u32)>,
+}
+
 #[async_trait::async_trait(?Send)]
 impl Renderer for CpuRenderer {
     async fn init(&mut self) -> Result<(), RendererError> {
         Ok(())
     }
+
+    async fn set_lut(&mut self, data: &[f32], size: u32) -> Result<(), RendererError> {
+        self.lut = Some((data.to_vec(), size));
+        Ok(())
+    }
+
     async fn render(
         &mut self,
         data: &[u8],
@@ -209,8 +257,12 @@ impl Renderer for CpuRenderer {
     ) -> Result<Vec<u8>, RendererError> {
         // We need to copy data because process_frame_internal takes &mut [u8]
         let mut data_vec = data.to_vec();
+        
+        // Pass LUT data if available
+        let lut_ref = self.lut.as_ref().map(|(d, s)| (d.as_slice(), *s));
+        
         let (res, _, _) =
-            operations::process_frame_internal(&mut data_vec, width, height, settings)
+            operations::process_frame_internal(&mut data_vec, width, height, settings, lut_ref)
                 .map_err(RendererError::RenderFailed)?;
         Ok(res)
     }
@@ -223,8 +275,11 @@ impl Renderer for CpuRenderer {
         canvas: &web_sys::HtmlCanvasElement,
     ) -> Result<(), RendererError> {
         let mut data_vec = data.to_vec();
+        // Pass LUT data if available
+        let lut_ref = self.lut.as_ref().map(|(d, s)| (d.as_slice(), *s));
+
         let (res, w, h) =
-            operations::process_frame_internal(&mut data_vec, width, height, settings)
+            operations::process_frame_internal(&mut data_vec, width, height, settings, lut_ref)
                 .map_err(RendererError::RenderFailed)?;
 
         if canvas.width() != w || canvas.height() != h {
@@ -301,7 +356,7 @@ impl QuickFixRenderer {
         // 3. Fallback to CPU
         if force.is_none() || force == Some("cpu") {
             return Ok(QuickFixRenderer {
-                renderer: Box::new(CpuRenderer),
+                renderer: Box::new(CpuRenderer { lut: None }),
                 backend_name: "cpu".to_string(),
             });
         }
@@ -354,6 +409,17 @@ impl QuickFixRenderer {
         })
     }
 
+    pub async fn set_lut(&mut self, lut: JsValue) -> Result<(), JsValue> {
+        // lut is expected to be { data: Float32Array, size: number }
+        // We can deserialize it into LutResult struct
+        let lut: LutResult = serde_wasm_bindgen::from_value(lut)?;
+        self.renderer
+            .set_lut(&lut.data, lut.size)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(())
+    }
+
     // Keep render_to_canvas for convenience if passing a canvas directly
     pub async fn render_to_canvas(
         &mut self,
@@ -375,6 +441,17 @@ impl QuickFixRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api_types::Lut3DSettings; // Import specific type
+    use crate::operations::apply_lut_in_place; // Import helper
+    use image::{Rgba, RgbaImage};
+
+    fn create_test_image(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {
+        let mut img = RgbaImage::new(width, height);
+        for p in img.pixels_mut() {
+            *p = Rgba(color);
+        }
+        img
+    }
 
     #[test]
     fn test_serialization() {
@@ -406,8 +483,8 @@ mod tests {
             ..Default::default()
         };
 
-        let res1 = operations::process_frame_internal(&mut data1, width, height, &adj).unwrap();
-        let res2 = operations::process_frame_internal(&mut data2, width, height, &adj).unwrap();
+        let res1 = operations::process_frame_internal(&mut data1, width, height, &adj, None).unwrap();
+        let res2 = operations::process_frame_internal(&mut data2, width, height, &adj, None).unwrap();
 
         assert_eq!(
             res1.0, res2.0,
@@ -421,8 +498,89 @@ mod tests {
         let height = 10;
         let mut data = vec![0u8; (width * height * 4) as usize];
         let adj = QuickFixAdjustments::default();
-        let res = operations::process_frame_internal(&mut data, width, height, &adj);
+        let res = operations::process_frame_internal(&mut data, width, height, &adj, None);
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_apply_lut_identity() {
+        let width = 2;
+        let height = 2;
+        let mut img = create_test_image(width, height, [100, 100, 100, 255]);
+        
+        // Identity LUT 2x2x2
+        // Order: R(0.0), R(1.0). For each R, G(0), G(1). For each G, B(0), B(1).
+        // size = 2.
+        // B moves fastest? Code: idx = ((b * size + g) * size + r).
+        // Wait, loop order in code:
+        // for r.. for g.. for b.. -> sample(root..).
+        // sample function: idx = ((b * size + g) * size + r)
+        // This implies r is safest (inner-most)? No.
+        // ((b * size + g) * size + r) implies:
+        // r changes 0..size.
+        // g changes 0..size.
+        // b changes 0..size.
+        // So memory layout: r changes fastest (contiguous).
+        // 0,0,0 -> 1,0,0 -> 0,1,0 -> 1,1,0 ...
+        
+        // Identity LUT: value at (r,g,b) is (r,g,b).
+        let mut lut_data = Vec::new();
+        for b in 0..2 {
+            for g in 0..2 {
+                for r in 0..2 {
+                     lut_data.push(r as f32);
+                     lut_data.push(g as f32);
+                     lut_data.push(b as f32);
+                }
+            }
+        }
+        
+        let settings = Lut3DSettings {
+            intensity: 1.0,
+            ..Default::default()
+        };
+        
+        apply_lut_in_place(&mut img, &lut_data, 2, &settings);
+        
+        let px = img.get_pixel(0, 0);
+        // Input 100/255 ~= 0.392. 
+        // LUT should map 0.392 -> 0.392.
+        // Allow simplified rounding error
+        assert!((px[0] as i32 - 100).abs() <= 1);
+        assert!((px[1] as i32 - 100).abs() <= 1);
+        assert!((px[2] as i32 - 100).abs() <= 1);
+    }
+    
+    #[test]
+    fn test_apply_lut_red() {
+        let width = 2;
+        let height = 2;
+        // Input gray
+        let mut img = create_test_image(width, height, [100, 100, 100, 255]);
+        
+        // Red LUT: Always returns (1.0, 0.0, 0.0)
+        let mut lut_data = Vec::new(); // 2x2x2
+        for _ in 0..8 {
+            lut_data.push(1.0);
+            lut_data.push(0.0);
+            lut_data.push(0.0);
+        }
+        
+        let settings = Lut3DSettings {
+            intensity: 0.5, // 50% blend
+            ..Default::default()
+        };
+        
+        apply_lut_in_place(&mut img, &lut_data, 2, &settings);
+        
+        let px = img.get_pixel(0, 0);
+        // Original: 100. Target: 255, 0, 0.
+        // Result: 100 * 0.5 + 255 * 0.5 = 50 + 127.5 = 177.5
+        // G/B: 100 * 0.5 + 0 = 50.
+        
+        assert!(px[0] >= 177 && px[0] <= 178);
+        assert!(px[1] >= 49 && px[1] <= 51);
+        assert!(px[2] >= 49 && px[2] <= 51);
     }
 
     #[test]

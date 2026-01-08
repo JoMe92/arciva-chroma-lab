@@ -64,6 +64,34 @@ function App() {
   const [grainAmount, setGrainAmount] = useState(0);
   const [grainSize, setGrainSize] = useState<'fine' | 'medium' | 'coarse'>('medium');
   const [rotation, setRotation] = useState(0);
+  // LUT State
+  const [lutIntensity, setLutIntensity] = useState(1.0);
+  const [lutName, setLutName] = useState<string | null>(null);
+
+  const handleLutUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    const text = await file.text();
+
+    // Using implicit import from module scope or dynamic import if needed.
+    // The parse_cube_lut is exported from 'quickfix-renderer'.
+    // We need to import it. 
+    // Since this is inside App component, we can assume imports are available or use valid import.
+    // We can assume imports are available or use valid import.
+
+    try {
+      if (clientRef.current) {
+        console.log("App: Uploading LUT content string to worker...");
+        await clientRef.current.uploadLut(text);
+        setLutName(file.name);
+        console.log("App: LUT uploaded");
+      }
+    } catch (err) {
+      console.error("Failed to upload LUT", err);
+      alert("Failed to load LUT: " + err);
+    }
+  };
+
   // Geometry Settings
   const [geoVertical, setGeoVertical] = useState(0); // New
   const [geoHorizontal, setGeoHorizontal] = useState(0); // New
@@ -214,6 +242,7 @@ function App() {
         exposure: { exposure, contrast, highlights, shadows },
         color: { temperature: temp, tint },
         grain: { amount: grainAmount, size: grainSize },
+        lut: { intensity: lutIntensity }, // New
         crop: {
           rotation,
           // Only send rect if it is APPLIED. Otherwise send undefined (full image).
@@ -322,7 +351,7 @@ function App() {
 
     render();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend]);
+  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
@@ -385,6 +414,14 @@ function App() {
             <option value="medium">Medium</option>
             <option value="coarse">Coarse</option>
           </select>
+
+          <h3>LUT</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+            <input type="file" accept=".cube" onChange={handleLutUpload} />
+            {lutName && <span style={{ fontSize: '0.8em', color: 'green' }}>Loaded: {lutName}</span>}
+            <label>Intensity: {lutIntensity}</label>
+            <input type="range" min="0" max="1" step="0.05" value={lutIntensity} onChange={e => setLutIntensity(parseFloat(e.target.value))} />
+          </div>
 
           <h3>Geometry</h3>
           <label>Rotation: {rotation}</label>
