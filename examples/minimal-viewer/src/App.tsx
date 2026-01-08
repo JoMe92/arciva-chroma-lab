@@ -522,10 +522,10 @@ function App() {
             </button>
           </div>
           <label>Temp: {temp}</label>
-          <input type="range" min="-1" max="1" step="0.05" value={temp} onChange={e => setTemp(parseFloat(e.target.value))} />
+          <input data-testid="temp-slider" type="range" min="-1" max="1" step="0.05" value={temp} onChange={e => setTemp(parseFloat(e.target.value))} />
 
           <label>Tint: {tint}</label>
-          <input type="range" min="-1" max="1" step="0.05" value={tint} onChange={e => setTint(parseFloat(e.target.value))} />
+          <input data-testid="tint-slider" type="range" min="-1" max="1" step="0.05" value={tint} onChange={e => setTint(parseFloat(e.target.value))} />
 
           <h3>Grain</h3>
           <label>Amount: {grainAmount}</label>
