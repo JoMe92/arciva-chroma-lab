@@ -544,7 +544,11 @@ impl WebGlRenderer {
         );
         gl.uniform_1_f32(
             loc("u_lut_intensity").as_ref(),
-            settings.lut.as_ref().map(|l| l.intensity).unwrap_or(0.0),
+            if self.lut_cache.is_some() {
+                settings.lut.as_ref().map(|l| l.intensity).unwrap_or(0.0)
+            } else {
+                0.0
+            },
         );
 
         let grain_size = match settings.grain.as_ref().map(|g| g.size.as_str()) {

@@ -528,7 +528,11 @@ impl Renderer for WebGpuRenderer {
             },
             src_width: width as f32,
             src_height: height as f32,
-            lut_intensity: settings.lut.as_ref().map(|l| l.intensity).unwrap_or(0.0),
+            lut_intensity: if self.lut_texture.is_some() {
+                settings.lut.as_ref().map(|l| l.intensity).unwrap_or(0.0)
+            } else {
+                0.0
+            },
             _padding: 0.0,
         };
 
