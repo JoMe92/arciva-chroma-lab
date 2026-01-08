@@ -45,6 +45,20 @@ impl RendererOptions {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Lut3DSettings {
+    pub intensity: f32, // 0.0 to 1.0 (opacity)
+    pub tint: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GrainSettings {
+    pub intensity: f32, // 0.0 to 1.0
+    pub size: f32,      // 0.0 to 1.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[wasm_bindgen]
 pub struct ProcessOptions {

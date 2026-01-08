@@ -1,0 +1,498 @@
+use roxmltree::Document;
+use std::str::FromStr;
+
+/// Parses a LUT file based on extension/format hint.
+pub fn parse_lut(content: &str, ext: &str) -> Result<(Vec<f32>, u32), String> {
+    match ext.to_lowercase().as_str() {
+        "cube" => parse_cube_file(content),
+        "3dl" => parse_3dl_file(content),
+        "xmp" => parse_xmp_file(content),
+        _ => Err(format!("Unsupported LUT format: {}", ext)),
+    }
+}
+
+pub fn parse_cube_file(content: &str) -> Result<(Vec<f32>, u32), String> {
+    let mut size = 0u32;
+    let mut data = Vec::new();
+    let mut data_started = false;
+
+    for line in content.lines() {
+        let line = line.trim();
+        // Skip empty lines and comments
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        if !data_started {
+            if line.starts_with("LUT_3D_SIZE") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    if let Ok(s) = parts[1].parse::<u32>() {
+                        size = s;
+                        data.reserve((size * size * size * 3) as usize);
+                    } else {
+                        return Err("Invalid size format".to_string());
+                    }
+                }
+            } else if line.starts_with("LUT_1D_SIZE") {
+                return Err("1D LUTs are not supported".to_string());
+            } else if line.starts_with("TITLE") || line.starts_with("DOMAIN_") {
+                continue;
+            } else if size > 0 {
+                data_started = true;
+                parse_data_line(line, &mut data)?;
+            } else if is_numeric_line(line) {
+                return Err("Found data before LUT_3D_SIZE".to_string());
+            }
+        } else {
+            parse_data_line(line, &mut data)?;
+        }
+    }
+
+    if size == 0 {
+        return Err("LUT_3D_SIZE not found".to_string());
+    }
+    validate_data_len(&data, size)
+}
+
+fn parse_3dl_file(content: &str) -> Result<(Vec<f32>, u32), String> {
+    let mut size = 0u32;
+    let mut data = Vec::new();
+    let mut grid_points_read = false;
+
+    // 3DL usually starts with grid points. multiple lines or one line.
+    // Example:
+    // 0 64 128 ... 1023
+    // followed by RGB data
+
+    // We need to detect the grid definition to determine size.
+    // Assuming simple format: valid grid definition line has N integers.
+
+    let lines = content
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'));
+
+    // Peek first line to check if it's metadata or grid
+    for line in lines {
+        let line = line.trim();
+
+        if !grid_points_read {
+            // Check if it's a grid line. Just a list of numbers.
+            if is_numeric_line(line) {
+                let nums: Vec<&str> = line.split_whitespace().collect();
+                // If it's the grid definition, the number of items is the size.
+                // 3DL usually has grid points. Even if just 2 (0..1023), it's a grid.
+                // We assume if we read a line of >= 2 integers, it's a grid def.
+                // (Unless it's 3 integers, which COULD be data, but 3DL header usually comes first).
+                // Let's assume if !grid_points_read, 3 integers is ambiguous but likely grid if it's the first non-comment line.
+                // But for safety, let's keep it strict-ish: >= 2.
+                // If it is EXACTLY 3, it might be data if one-line header is missing?
+                // But valid 3DL MUST have grid def.
+                // So if we haven't seen grid yet, ANY numeric line is likely grid.
+                if nums.len() >= 2 {
+                    size = nums.len() as u32;
+                    // If we found one, we might find 2 more (separate channels), or just this one.
+                    // We assume cubic grid, so we just take this size.
+                    // However, we need to consume potential next 2 grid lines if they exist.
+                    // Implementation detail: we could just read untill valid RGB triplets appear.
+                    grid_points_read = true;
+
+                    // Pre-allocate
+                    data.reserve((size * size * size * 3) as usize);
+                    continue;
+                } else if nums.len() == 1 {
+                    // Weird.
+                }
+                // Fallback: if we didn't match above, check if it looks like data?
+                // But if !grid_points_read, we can't parse data yet because we don't know size.
+                // So we error if we can't find grid.
+            }
+            // Skip other metadata like "shaper" or weird headers?
+        } else {
+            // Grid read, now read data
+            // But we might encounter 2 more grid lines if they listed R, G, B separately.
+            // If the line has `size` items again, it's a grid line.
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() == size as usize {
+                // Another grid line, skip
+                continue;
+            } else if parts.len() == 3 {
+                // Data line
+                parse_data_line(line, &mut data)?;
+            } else {
+                // Unknown?
+            }
+        }
+    }
+
+    if size == 0 {
+        return Err("Could not determine grid size from .3dl".to_string());
+    }
+
+    // 3DL data range is often 0..1023 (10bit) or 0..4095 or 0..65535?
+    // We need to normalize to 0..1.
+    // Check max value?
+    let max_val = data.iter().fold(0.0f32, |a, &b| a.max(b));
+    if max_val > 1.0 {
+        // Assume 10-bit (1023) or 12-bit?
+        // Usually 3DL is 10-bit integer based often.
+        // Let's normalize by max_val or a standard?
+        // If max is > 1.0, we normalize.
+        // Common steps are 1023 (10-bit).
+        // Let's normalize by 1023.0 if it looks like 10-bit?
+        // Or if max > 255.0?
+        // Safer: normalize by the nearest power of 2 minus 1? or just max_val found?
+        // If we use max_val found, we might clip whites if the LUT doesn't reach 100% white?
+        // 3DL "mesh" usually defines the input range (0..1023).
+        // It is safest to assume standard 3DL is 10-bit output usually.
+        // Let's try 1023.0 normalization factor if max > 1.0.
+        // (Autodesk/Flame ususally use 10-bit Log or Lin).
+
+        let scale = if max_val > 60000.0 {
+            65535.0
+        } else if max_val > 3000.0 {
+            4095.0 // 12 bit
+        } else if max_val > 1.0 {
+            1023.0 // 10 bit
+        } else {
+            1.0
+        };
+
+        for v in &mut data {
+            *v /= scale;
+        }
+    }
+
+    validate_data_len(&data, size)
+}
+
+fn parse_xmp_file(content: &str) -> Result<(Vec<f32>, u32), String> {
+    let doc = Document::parse(content).map_err(|e| format!("XML Parse error: {}", e))?;
+
+    // Look for crs:LookTable or similar.
+    // Namespaces are tricky in roxmltree lookup without explicit full names?
+    // We can just iterate nodes and check logical names.
+
+    // We search for a node name ending in "LookTable" (crs:LookTable usually)
+    // There might be <crs:LookTable> ... hex data ... </crs:LookTable>
+    // Or inside Description.
+
+    let look_table_node = doc.descendants().find(|n| {
+        n.tag_name().name().ends_with("LookTable") || n.tag_name().name().ends_with("Table")
+        // broad check?
+    });
+
+    if let Some(node) = look_table_node {
+        // Text content is the LUT data. usually hex blob.
+        let text = node.text().unwrap_or("").trim();
+        // Check parsing format.
+        // 32 chars hex string = 16 bytes = 128 bit md5? no.
+        // usually it's a huge blob.
+        // If it's hex, 2 chars per byte?
+        // Or base64?
+        // Adobe XMP LookTable is often MD5 if it refers to external?
+        // If it's "RGB Table", it's raw bytes?
+
+        // Actually, often crs:LookTable is NOT embedded full data in all profiles.
+        // But in "Enhanced Profiles" (xmp files that serve as LUTs), it IS the table.
+        // And it's often binary-as-hex.
+
+        // Let's assume hex string of 32-bit float or 8-bit int?
+        // Usually RGB floats?
+        // Wait, if it's hex, one float is 8 hex chars?
+
+        // Let's assume we can't fully support all XMP variants blindly.
+        // But let's support plain text numbers if it is list of numbers?
+
+        if text.contains(|c: char| c.is_whitespace() && !c.is_control()) {
+            // If it has spaces, maybe just numbers?
+            // <rs:Table>0.000 0.100 ...</rs:Table> ? (Rare for XMP)
+            let mut data = Vec::new();
+            for part in text.split_whitespace() {
+                if let Ok(v) = f32::from_str(part) {
+                    data.push(v);
+                }
+            }
+            if !data.is_empty() {
+                // Guess size
+                let c = data.len();
+                // size^3 * 3 = c => size = cbrt(c/3)
+                let size = ((c as f32 / 3.0).powf(1.0 / 3.0).round()) as u32;
+                if (size * size * size * 3) as usize == c {
+                    return validate_data_len(&data, size);
+                }
+            }
+        }
+
+        // If no spaces, maybe hex blob.
+        // Try decoding hex.
+        if text.len() > 100 && text.chars().all(|c| c.is_ascii_hexdigit()) {
+            // Hex string.
+            // Assume packed binary f32? or u8?
+            // Usually Adobe uses 32-bit floats.
+            // 8 chars per float?
+
+            // Chunks of 8 chars?
+            // Or maybe it is base64? (A-Za-z0-9+/=)
+            // Hex is just 0-9A-F.
+            // If all hex, likely hex.
+
+            // Implementation: Parse chunks of 2 chars as byte? Then assemble floats?
+            // Or chunks of 8 chars as f32 hex representation? (unlikely standard).
+            // Most likely it is a byte array represented as hex.
+            // And the bytes form f32s (Little Endian?).
+
+            // Let's try: parse to bytes, then cast to f32 slice.
+            // Need even length.
+            if text.len() % 2 != 0 {
+                return Err("Hex string has odd length".to_string());
+            }
+
+            let bytes: Vec<u8> = (0..text.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap_or(0))
+                .collect();
+
+            // Now view as f32s.
+            // We need exactly bytes.len() / 4 floats.
+            if bytes.len().is_multiple_of(4) {
+                let data: Vec<f32> = bytes
+                    .chunks(4)
+                    .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                    .collect();
+
+                // Guess size
+                let c = data.len();
+                let size = ((c as f32 / 3.0).powf(1.0 / 3.0).round()) as u32;
+                if size > 0 && (size * size * size * 3) as usize == c {
+                    return validate_data_len(&data, size);
+                }
+            }
+        }
+    }
+
+    Err("Could not find valid LUT data in XMP".to_string())
+}
+
+fn validate_data_len(data: &[f32], size: u32) -> Result<(Vec<f32>, u32), String> {
+    let expected = (size * size * size * 3) as usize;
+    if data.len() == expected {
+        Ok((data.to_vec(), size)) // Clone needed to return ownership
+    } else {
+        Err(format!(
+            "Data length mismatch. Expected {}, got {}",
+            expected,
+            data.len()
+        ))
+    }
+}
+
+fn is_numeric_line(line: &str) -> bool {
+    line.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_digit() || c == '-')
+}
+
+fn parse_data_line(line: &str, data: &mut Vec<f32>) -> Result<(), String> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() != 3 {
+        return Err(format!("Invalid data line: '{}'", line));
+    }
+    for part in parts {
+        match f32::from_str(part) {
+            Ok(v) => data.push(v),
+            Err(_) => return Err(format!("Invalid number: '{}'", part)),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Helper for generating dummy data ---
+    fn _generate_cube_data(size: u32) -> String {
+        let mut s = format!("LUT_3D_SIZE {}\n", size);
+        let count = size * size * size;
+        for _ in 0..count {
+            s.push_str("0.0 0.5 1.0\n");
+        }
+        s
+    }
+
+    // --- .cube Tests ---
+
+    #[test]
+    fn test_parse_simple_cube() {
+        let content = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1";
+        let (data, size) = parse_lut(content, "cube").unwrap();
+        assert_eq!(size, 2);
+        assert_eq!(data.len(), 24);
+        assert_eq!(data[0], 0.0);
+        assert_eq!(data[23], 1.0);
+    }
+
+    #[test]
+    fn test_cube_with_comments_and_metadata() {
+        let content = r#"
+            # This is a comment
+            TITLE "My LUT"
+            DOMAIN_MIN 0.0 0.0 0.0
+            DOMAIN_MAX 1.0 1.0 1.0
+            LUT_3D_SIZE 2
+            # Data starts now
+            0.0 0.0 0.0
+            0.1 0.1 0.1
+            0.2 0.2 0.2
+            0.3 0.3 0.3
+            0.4 0.4 0.4
+            0.5 0.5 0.5
+            0.6 0.6 0.6
+            0.7 0.7 0.7
+        "#;
+        let (data, size) = parse_lut(content, "cube").unwrap();
+        assert_eq!(size, 2);
+        assert_eq!(data.len(), 24);
+        assert_eq!(data[3], 0.1);
+    }
+
+    #[test]
+    fn test_cube_invalid_size() {
+        let content = "LUT_3D_SIZE\n0 0 0"; // Missing value
+        assert!(parse_lut(content, "cube").is_err());
+
+        let content = "LUT_3D_SIZE ABC\n0 0 0"; // Bad value
+        assert!(parse_lut(content, "cube").is_err());
+    }
+
+    #[test]
+    fn test_cube_data_mismatch() {
+        let content = "LUT_3D_SIZE 2\n0 0 0\n1 0 0"; // Not enough data
+        assert!(parse_lut(content, "cube").is_err());
+    }
+
+    // --- .3dl Tests ---
+
+    #[test]
+    fn test_3dl_parsing_implicit_grid() {
+        // "0 1023" -> Len 2. Now accepted as grid.
+        let content = "0 1023\n0 0 0\n1023 0 0\n0 1023 0\n1023 1023 0\n0 0 1023\n1023 0 1023\n0 1023 1023\n1023 1023 1023";
+        let (data, size) = parse_lut(content, "3dl").unwrap();
+        assert_eq!(size, 2);
+        assert_eq!(data.len(), 24);
+
+        // Check normalization (1023 -> 1.0)
+        assert_eq!(data[3], 1.0); // 1023 0 0 -> R channel
+    }
+
+    #[test]
+    fn test_3dl_normalization_detect_12bit() {
+        // Max value 4095
+        let content = "0 4095\n0 0 0\n4095 0 0\n0 4095 0\n4095 4095 0\n0 0 4095\n4095 0 4095\n0 4095 4095\n4095 4095 4095";
+        let (data, size) = parse_lut(content, "3dl").unwrap(); // Assuming parse_3dl_file is now parse_lut with "3dl"
+        assert_eq!(size, 2);
+        assert!((data[3] - 1.0).abs() < 1e-5, "Should normalize 4095 to 1.0");
+    }
+
+    #[test]
+    fn test_3dl_missing_grid() {
+        // No grid line (only 1s, which are ignored or handled?)
+        // parser demands grid first.
+        // If "0 0 0" is sent, it is len=3.
+        // With strict check "if nums.len() >= 2", "0 0 0" is accepted as grid of size 3!
+        // So this test case "0 0 0" -> parses as Grid size 3.
+        // Then subsequent lines...
+        // If we want to simulate MISSING grid, we need invalid grid line?
+        // Or if file ends?
+
+        // Let's use a non-numeric first line? No, they are skipped.
+        // If we pass ONLY data lines like "0 0 0", it will be interpreted as grid size 3.
+        // Then we expect 3^3 = 27 lines.
+        // If we only provide 2 lines, it will fail data len check.
+        // So "0 0 0\n100 100 100" -> grid size 3. expected 27 data lines. got 1 data line (the second one).
+        // Result: Err("Data length mismatch").
+        // This confirms it catches "missing grid" (or misinterpretation).
+
+        let content = "0 0 0\n100 100 100";
+        assert!(parse_lut(content, "3dl").is_err());
+    }
+
+    #[test]
+    fn test_xmp_text_floats() {
+        // Valid XMP with plain text floats (simplest format)
+        // Added xmlns:rdf and xmlns:crs
+        let content = r#"
+            <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' xmlns:crs='http://ns.adobe.com/camera-raw-settings/1.0/'>
+                <rdf:Description>
+                    <crs:LookTable>
+                        0.0 0.0 0.0
+                        1.0 0.0 0.0
+                        0.0 1.0 0.0
+                        1.0 1.0 0.0
+                        0.0 0.0 1.0
+                        1.0 0.0 1.0
+                        0.0 1.0 1.0
+                        1.0 1.0 1.0
+                    </crs:LookTable>
+                </rdf:Description>
+            </rdf:RDF>
+        "#;
+        let (data, size) = parse_lut(content, "xmp").unwrap();
+        assert_eq!(size, 2);
+        assert_eq!(data.len(), 24);
+        assert_eq!(data[3], 1.0);
+    }
+
+    #[test]
+    fn test_xmp_hex_data() {
+        // ... (data generation same) ...
+        let zero = "00000000";
+        let one = "0000803F";
+
+        let mut hex = String::new();
+        // 0 0 0
+        hex += &format!("{}{}{}", zero, zero, zero);
+        // 1 0 0
+        hex += &format!("{}{}{}", one, zero, zero);
+        // 0 1 0
+        hex += &format!("{}{}{}", zero, one, zero);
+        // 1 1 0
+        hex += &format!("{}{}{}", one, one, zero);
+        // 0 0 1
+        hex += &format!("{}{}{}", zero, zero, one);
+        // 1 0 1
+        hex += &format!("{}{}{}", one, zero, one);
+        // 0 1 1
+        hex += &format!("{}{}{}", zero, one, one);
+        // 1 1 1
+        hex += &format!("{}{}{}", one, one, one);
+
+        // Added xmlns:x and xmlns:rdf and xmlns:crs
+        let content = format!(
+            r#"
+            <x:xmpmeta xmlns:x='adobe:ns:meta/'>
+             <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' xmlns:crs='http://ns.adobe.com/camera-raw-settings/1.0/'>
+              <rdf:Description>
+               <crs:LookTable>
+                {}
+               </crs:LookTable>
+              </rdf:Description>
+             </rdf:RDF>
+            </x:xmpmeta>
+        "#,
+            hex
+        );
+
+        let (data, size) = parse_lut(&content, "xmp").unwrap();
+        assert_eq!(size, 2);
+        assert_eq!(data.len(), 24);
+        assert_eq!(data[3], 1.0);
+        assert_eq!(data[4], 0.0);
+    }
+
+    #[test]
+    fn test_unsupported_format() {
+        assert!(parse_lut("dummy", "jpg").is_err());
+    }
+}

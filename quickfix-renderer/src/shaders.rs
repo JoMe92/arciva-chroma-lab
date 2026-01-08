@@ -46,6 +46,9 @@ struct Settings {
     // Dimensions
     src_width: f32,
     src_height: f32,
+
+    // LUT
+    lut_intensity: f32, 
 };
 
 @group(0) @binding(0) var<uniform> settings: Settings;
@@ -53,6 +56,8 @@ struct Settings {
 @group(0) @binding(2) var s_diffuse: sampler;
 @group(0) @binding(3) var t_grain: texture_2d<f32>; // Pre-seeded noise texture
 @group(0) @binding(4) var s_grain: sampler;
+@group(0) @binding(5) var t_lut: texture_3d<f32>;
+@group(0) @binding(6) var s_lut: sampler;
 
 // Helper: Bicubic sampling
 fn cubic_hermite(a: f32, b: f32, c: f32, d: f32, t: f32) -> f32 {
@@ -286,7 +291,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         );
     }
     
-    // 5. Grain
+    // 5. LUT
+    if (settings.lut_intensity > 0.0) {
+        // Map color to 0..1 (it is already)
+        // Texture 3D sampling
+        // Color is the coordinate.
+        // We need a sampler and texture.
+        // Assuming we add binding 5 and 6 for LUT.
+        let lut_color = textureSample(t_lut, s_lut, color.rgb);
+        
+        color = vec4<f32>(mix(color.rgb, lut_color.rgb, settings.lut_intensity), color.a); 
+    }
+
+    // 6. Grain
     if (settings.grain_amount > 0.0) {
         // Sample grain texture
         // Grain texture is tiled.
@@ -374,6 +391,8 @@ uniform float u_tint;
 uniform float u_grain_amount;
 uniform float u_grain_size;
 uniform vec2 u_src_size;
+uniform sampler3D u_lut;
+uniform float u_lut_intensity;
 
 // Helper: Cubic Hermite
 float cubic_hermite(float a, float b, float c, float d, float t) {
@@ -502,7 +521,13 @@ void main() {
         color.b *= temp_b * tint_rb;
     }
     
-    // 5. Grain
+    // 5. LUT 
+    if (u_lut_intensity > 0.0) {
+        vec3 lut_col = texture(u_lut, color.rgb).rgb;
+        color.rgb = mix(color.rgb, lut_col, u_lut_intensity);
+    }
+    
+    // 6. Grain
     if (u_grain_amount > 0.0) {
         float grain_scale = max(1.0, u_grain_size);
         vec2 grain_uv = (v_uv * u_src_size) / grain_scale; // Use v_uv (screen space) or uv (image space)?

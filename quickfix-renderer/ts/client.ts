@@ -99,6 +99,17 @@ export class QuickFixClient {
     }
 
     /**
+     * Uploads a raw .cube file content to the worker for parsing and application.
+     * @param content - The text content of the .cube file.
+     */
+    async uploadLut(content: string, extension: string): Promise<void> {
+        this.worker.postMessage({
+            type: 'UPLOAD_LUT',
+            payload: { content, extension }
+        } as WorkerMessage);
+    }
+
+    /**
      * Sends a render request to the worker.
      * @param imageData - The input image data (optional if setImage was called).
      * @param width - Image width.

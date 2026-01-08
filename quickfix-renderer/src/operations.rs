@@ -17,11 +17,14 @@ fn clamp_u8(v: f32) -> u8 {
     clamp(v, 0.0, 255.0) as u8
 }
 
+use crate::api_types::Lut3DSettings;
+
 pub fn process_frame_internal(
     data: &mut [u8],
     width: u32,
     height: u32,
     adjustments: &QuickFixAdjustments,
+    lut_buffer: Option<(&[f32], u32)>,
 ) -> Result<(Vec<u8>, u32, u32), String> {
     // Convert raw bytes to ImageBuffer
     let mut img: RgbaImage =
@@ -47,7 +50,12 @@ pub fn process_frame_internal(
         apply_color_balance_in_place(&mut img, col);
     }
 
-    // 5. Grain
+    // 5. LUT
+    if let (Some(lut_settings), Some((lut_data, lut_size))) = (&adjustments.lut, lut_buffer) {
+        apply_lut_in_place(&mut img, lut_data, lut_size, lut_settings);
+    }
+
+    // 6. Grain
     if let Some(grain) = &adjustments.grain {
         apply_grain_in_place(&mut img, grain);
     }
@@ -438,6 +446,121 @@ fn apply_grain_in_place(img: &mut RgbaImage, settings: &GrainSettings) {
             pixel[1] = clamp_u8(g);
             pixel[2] = clamp_u8(b);
         }
+    }
+}
+
+pub(crate) fn apply_lut_in_place(
+    img: &mut RgbaImage,
+    lut_data: &[f32],
+    size: u32,
+    settings: &Lut3DSettings,
+) {
+    if settings.intensity <= 0.0 {
+        return;
+    }
+
+    let size_f = size as f32;
+    let max_idx = size_f - 1.0;
+    let intensity = clamp(settings.intensity, 0.0, 1.0);
+
+    for pixel in img.pixels_mut() {
+        let r_in = pixel[0] as f32 / 255.0;
+        let g_in = pixel[1] as f32 / 255.0;
+        let b_in = pixel[2] as f32 / 255.0;
+        // alpha ignored for LUT
+
+        // Map 0..1 to 0..size-1 (LUT coordinate space)
+        let r_c = r_in * max_idx;
+        let g_c = g_in * max_idx;
+        let b_c = b_in * max_idx;
+
+        // Trilinear interpolation
+        // Indices
+        let r0 = r_c.floor() as u32;
+        let g0 = g_c.floor() as u32;
+        let b0 = b_c.floor() as u32;
+
+        let r1 = (r0 + 1).min(size - 1);
+        let g1 = (g0 + 1).min(size - 1);
+        let b1 = (b0 + 1).min(size - 1);
+
+        // Weights
+        let rw = r_c - r0 as f32;
+        let gw = g_c - g0 as f32;
+        let bw = b_c - b0 as f32;
+
+        let sample = |r, g, b| {
+            let idx = ((b * size + g) * size + r) as usize * 3;
+            // .cube format is (size*size*size) lines.
+            // Standard order: Red changes fastest, then Green, then Blue.
+            // i.e. loop B, loop G, loop R.
+            // Index = b * size*size + g * size + r.
+            if idx + 2 < lut_data.len() {
+                [lut_data[idx], lut_data[idx + 1], lut_data[idx + 2]]
+            } else {
+                [r_in, g_in, b_in] // Fallback (shouldn't happen if size is correct)
+            }
+        };
+
+        // 8 corners
+        let c000 = sample(r0, g0, b0);
+        let c100 = sample(r1, g0, b0);
+        let c010 = sample(r0, g1, b0);
+        let c001 = sample(r0, g0, b1);
+        let c110 = sample(r1, g1, b0);
+        let c101 = sample(r1, g0, b1);
+        let c011 = sample(r0, g1, b1);
+        let c111 = sample(r1, g1, b1);
+
+        // Interpolate along R
+        let c00 = [
+            c000[0] * (1.0 - rw) + c100[0] * rw,
+            c000[1] * (1.0 - rw) + c100[1] * rw,
+            c000[2] * (1.0 - rw) + c100[2] * rw,
+        ];
+        let c10 = [
+            c010[0] * (1.0 - rw) + c110[0] * rw,
+            c010[1] * (1.0 - rw) + c110[1] * rw,
+            c010[2] * (1.0 - rw) + c110[2] * rw,
+        ];
+        let c01 = [
+            c001[0] * (1.0 - rw) + c101[0] * rw,
+            c001[1] * (1.0 - rw) + c101[1] * rw,
+            c001[2] * (1.0 - rw) + c101[2] * rw,
+        ];
+        let c11 = [
+            c011[0] * (1.0 - rw) + c111[0] * rw,
+            c011[1] * (1.0 - rw) + c111[1] * rw,
+            c011[2] * (1.0 - rw) + c111[2] * rw,
+        ];
+
+        // Interpolate along G
+        let c0 = [
+            c00[0] * (1.0 - gw) + c10[0] * gw,
+            c00[1] * (1.0 - gw) + c10[1] * gw,
+            c00[2] * (1.0 - gw) + c10[2] * gw,
+        ];
+        let c1 = [
+            c01[0] * (1.0 - gw) + c11[0] * gw,
+            c01[1] * (1.0 - gw) + c11[1] * gw,
+            c01[2] * (1.0 - gw) + c11[2] * gw,
+        ];
+
+        // Interpolate along B
+        let c = [
+            c0[0] * (1.0 - bw) + c1[0] * bw,
+            c0[1] * (1.0 - bw) + c1[1] * bw,
+            c0[2] * (1.0 - bw) + c1[2] * bw,
+        ];
+
+        // Mix with original (intensity)
+        let r_out = r_in * (1.0 - intensity) + c[0] * intensity;
+        let g_out = g_in * (1.0 - intensity) + c[1] * intensity;
+        let b_out = b_in * (1.0 - intensity) + c[2] * intensity;
+
+        pixel[0] = clamp_u8(r_out * 255.0);
+        pixel[1] = clamp_u8(g_out * 255.0);
+        pixel[2] = clamp_u8(b_out * 255.0);
     }
 }
 
