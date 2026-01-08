@@ -45,6 +45,29 @@ function getOpaqueCrop(rotationDegrees: number, width: number, height: number) {
 // Note: We might need to use a relative path if package resolution fails for ?url
 import workerUrl from '../../../quickfix-renderer/pkg/worker.js?url';
 
+// Helper for White Balance Calculation
+function calculateWhiteBalance(r: number, g: number, b: number) {
+  // Avoid division by zero
+  if (r + b === 0) return { temp: 0, tint: 0 };
+
+  // 1. Calculate Temperature (T)
+  // Formula derived from shader: T = (B - R) / (0.25 * (R + B))
+  const temp = (b - r) / (0.25 * (r + b));
+
+  // 2. Calculate Tint (t)
+  // Let X = R * (1 + 0.25 * T)
+  // Formula derived from shader: t = (G - X) / (0.1 * X + 0.2 * G)
+  const X = r * (1.0 + 0.25 * temp);
+
+  const denom = 0.1 * X + 0.2 * g;
+  // If denom is too small, assume tint is 0
+  if (Math.abs(denom) < 1e-5) return { temp: temp, tint: 0 };
+
+  const tint = (g - X) / denom;
+
+  return { temp, tint };
+}
+
 function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const clientRef = useRef<QuickFixClient | null>(null);
@@ -69,6 +92,9 @@ function App() {
   // LUT State
   const [lutIntensity, setLutIntensity] = useState(1.0);
   const [lutName, setLutName] = useState<string | null>(null);
+
+  // Interaction State
+  const [isPickingWB, setIsPickingWB] = useState(false);
 
   const handleLutUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -360,6 +386,77 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity]);
 
+  // Handle Canvas Click for WB Picking
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isPickingWB || !imageData || !image || !canvasRef.current) return;
+
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // Map screen coordinates to canvas internal resolution
+    const scaleX = canvasRef.current.width / rect.width;
+    const scaleY = canvasRef.current.height / rect.height;
+
+    const canvasX = Math.floor(x * scaleX);
+    const canvasY = Math.floor(y * scaleY);
+
+    let imgX = canvasX;
+    let imgY = canvasY;
+
+    if (appliedCrop) {
+      // If cropped, map canvas coordinates back to original image coordinates
+      // See render loop logic: safeX, safeY were used to crop existing image
+      const width = image.width;
+      const height = image.height;
+      const cropX = Math.round(appliedCrop.x * width);
+      const cropY = Math.round(appliedCrop.y * height);
+
+      const safeX = Math.max(0, cropX);
+      const safeY = Math.max(0, cropY);
+
+      imgX = safeX + canvasX;
+      imgY = safeY + canvasY;
+    }
+
+    // Boundary check
+    if (imgX < 0 || imgX >= image.width || imgY < 0 || imgY >= image.height) {
+      return;
+    }
+
+    // Handle Flips (Map visual coordinate to source coordinate)
+    // If displayed image is flipped, the pixel at 'imgX' corresponds to 'width - imgX' in source
+    if (flipHorizontal) {
+      // Logic: If appliedCrop is active, the crop rect itself was flipped? 
+      // Current pipeline: Flips happen LAST in shader (closest to resource)?
+      // No, usually flips are applied to the whole image.
+      // If we are in Crop mode, we are seeing a crop of the flipped image?
+      // Let's assume Flip is applied to the WHOLE image space.
+      // So Source(x) = Width - 1 - Display(x).
+      // If Cropped: We have mapped Display(x) -> ImageSpace(x) via safeX offset.
+      // Now invert the global flip.
+      imgX = image.width - 1 - imgX;
+    }
+    if (flipVertical) {
+      imgY = image.height - 1 - imgY;
+    }
+
+    // Sample from ORIGINAL image data
+    const idx = (imgY * image.width + imgX) * 4;
+    const r = imageData[idx];
+    const g = imageData[idx + 1];
+    const b = imageData[idx + 2];
+
+    console.log(`WB Pick at (${imgX}, ${imgY}): R=${r}, G=${g}, B=${b}`);
+
+    const res = calculateWhiteBalance(r, g, b);
+    console.log("Calculated WB:", res);
+
+    setTemp(res.temp);
+    setTint(res.tint);
+    setIsPickingWB(false); // Disable picker after selection
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
       <h1>Quick Fix GPU Renderer</h1>
@@ -381,12 +478,14 @@ function App() {
         <canvas
           ref={canvasRef}
           key={backend}
+          onClick={handleCanvasClick}
           style={{
             border: '1px solid #ccc',
             maxWidth: '100%',
             maxHeight: '80vh',
             objectFit: 'contain',
-            display: 'block'
+            display: 'block',
+            cursor: isPickingWB ? 'crosshair' : 'default'
           }}
         />
 
@@ -405,6 +504,23 @@ function App() {
           <input type="range" min="-1" max="1" step="0.1" value={shadows} onChange={e => setShadows(parseFloat(e.target.value))} />
 
           <h3>Color</h3>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <button
+              onClick={() => setIsPickingWB(!isPickingWB)}
+              disabled={Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0}
+              title={Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0 ? "Reset Geometry/Rotation to pick WB" : "Click image to set White Balance"}
+              style={{
+                background: isPickingWB ? '#ddd' : '#f0f0f0',
+                border: '1px solid #999',
+                padding: '4px 8px',
+                cursor: (Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0) ? 'not-allowed' : 'pointer',
+                fontSize: '0.8rem',
+                opacity: (Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0) ? 0.5 : 1
+              }}
+            >
+              {isPickingWB ? 'Cancel Picker' : 'Pick Neutral Gray'}
+            </button>
+          </div>
           <label>Temp: {temp}</label>
           <input type="range" min="-1" max="1" step="0.05" value={temp} onChange={e => setTemp(parseFloat(e.target.value))} />
 
@@ -491,6 +607,7 @@ function App() {
 
           <div style={{ marginTop: '1rem', borderTop: '1px solid #eee', paddingTop: '0.5rem' }}>
             <h4>Debug Info</h4>
+            <div>WB Mode: {isPickingWB ? 'ACTIVE' : 'Inactive'}</div>
             <div>Backend: {currentBackend}</div>
             <div>Canvas Size: {canvasRef.current ? `${canvasRef.current.width}x${canvasRef.current.height}` : 'N/A'}</div>
             <div>Image Size: {image ? `${image.width}x${image.height}` : 'N/A'}</div>
