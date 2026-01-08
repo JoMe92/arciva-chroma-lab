@@ -19,13 +19,31 @@ fn clamp_u8(v: f32) -> u8 {
 
 use crate::api_types::Lut3DSettings;
 
+pub fn compute_histogram(data: &[u8]) -> Vec<u32> {
+    let mut histogram = vec![0u32; 256 * 3]; // R, G, B concatenated
+
+    // Each pixel is 4 bytes: R, G, B, A
+    for chunk in data.chunks_exact(4) {
+        let r = chunk[0] as usize;
+        let g = chunk[1] as usize;
+        let b = chunk[2] as usize;
+        // Alpha ignored
+
+        histogram[r] += 1;
+        histogram[256 + g] += 1;
+        histogram[512 + b] += 1;
+    }
+
+    histogram
+}
+
 pub fn process_frame_internal(
     data: &mut [u8],
     width: u32,
     height: u32,
     adjustments: &QuickFixAdjustments,
     lut_buffer: Option<(&[f32], u32)>,
-) -> Result<(Vec<u8>, u32, u32), String> {
+) -> Result<(Vec<u8>, u32, u32, Vec<u32>), String> {
     // Convert raw bytes to ImageBuffer
     let mut img: RgbaImage =
         ImageBuffer::from_raw(width, height, data.to_vec()).ok_or("Invalid buffer size")?;
@@ -61,7 +79,9 @@ pub fn process_frame_internal(
     }
 
     let (w, h) = img.dimensions();
-    Ok((img.into_raw(), w, h))
+    let raw = img.into_raw();
+    let histogram = compute_histogram(&raw);
+    Ok((raw, w, h, histogram))
 }
 
 // Bicubic interpolation helper
@@ -752,5 +772,17 @@ mod tests {
         let cy = 10;
         let px = res.get_pixel(cx, cy);
         assert!(px[0] > 90 && px[0] < 110);
+    }
+    #[test]
+    fn test_compute_histogram() {
+        // R=255, G=0, B=100
+        let data = vec![255, 0, 100, 255, 255, 0, 100, 255]; // 2 pixels
+        let hist = compute_histogram(&data);
+
+        assert_eq!(hist.len(), 768);
+        assert_eq!(hist[255], 2); // Red bin 255
+        assert_eq!(hist[256 + 0], 2); // Green bin 0
+        assert_eq!(hist[512 + 100], 2); // Blue bin 100
+        assert_eq!(hist[0], 0); // Red bin 0 should be 0
     }
 }

@@ -385,7 +385,7 @@ impl Renderer for WebGpuRenderer {
         width: u32,
         height: u32,
         settings: &QuickFixAdjustments,
-    ) -> Result<Vec<u8>, RendererError> {
+    ) -> Result<(Vec<u8>, Vec<u32>), RendererError> {
         self.ensure_initialized().await?;
         let device = self.device.as_ref().unwrap();
         let queue = self.queue.as_ref().unwrap();
@@ -665,7 +665,8 @@ impl Renderer for WebGpuRenderer {
         let data = buffer_slice.get_mapped_range().to_vec();
         output_buffer.unmap();
 
-        Ok(data)
+        let histogram = crate::operations::compute_histogram(&data);
+        Ok((data, histogram))
     }
 
     async fn render_to_canvas(

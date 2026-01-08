@@ -585,7 +585,7 @@ impl Renderer for WebGlRenderer {
         width: u32,
         height: u32,
         settings: &QuickFixAdjustments,
-    ) -> Result<Vec<u8>, RendererError> {
+    ) -> Result<(Vec<u8>, Vec<u32>), RendererError> {
         self.ensure_initialized(None)?;
 
         // Resize canvas if needed
@@ -611,7 +611,8 @@ impl Renderer for WebGlRenderer {
                 glow::PixelPackData::Slice(&mut pixels),
             );
 
-            Ok(pixels)
+            let histogram = crate::operations::compute_histogram(&pixels);
+            Ok((pixels, histogram))
         }
     }
 
