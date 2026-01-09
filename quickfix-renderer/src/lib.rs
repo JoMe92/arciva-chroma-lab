@@ -121,10 +121,33 @@ pub struct DenoiseSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct CurvePoint {
+    pub x: f32, // 0.0 to 1.0
+    pub y: f32, // 0.0 to 1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelCurve {
+    pub points: Vec<CurvePoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CurvesSettings {
+    pub master: Option<ChannelCurve>,
+    pub red: Option<ChannelCurve>,
+    pub green: Option<ChannelCurve>,
+    pub blue: Option<ChannelCurve>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct QuickFixAdjustments {
     pub crop: Option<CropSettings>,
     pub exposure: Option<ExposureSettings>,
     pub color: Option<ColorSettings>,
+    pub curves: Option<CurvesSettings>,
     pub grain: Option<GrainSettings>,
     pub geometry: Option<GeometrySettings>,
     pub denoise: Option<DenoiseSettings>,
@@ -196,14 +219,27 @@ export interface DenoiseSettings {
     color: number;
 }
 
-export interface Lut3DSettings {
-    intensity: number;
+export interface CurvesSettings {
+    master?: ChannelCurve;
+    red?: ChannelCurve;
+    green?: ChannelCurve;
+    blue?: ChannelCurve;
+}
+
+export interface ChannelCurve {
+    points: CurvePoint[];
+}
+
+export interface CurvePoint {
+    x: number;
+    y: number;
 }
 
 export interface QuickFixAdjustments {
     crop?: CropSettings;
     exposure?: ExposureSettings;
     color?: ColorSettings;
+    curves?: CurvesSettings;
     grain?: GrainSettings;
     geometry?: GeometrySettings;
     denoise?: DenoiseSettings;
@@ -249,7 +285,7 @@ pub fn process_frame_sync(
     // Sync version does not support LUT for now
     let (data, w, h, histogram) =
         operations::process_frame_internal(data, width, height, &adjustments, None)
-            .map_err(|e| JsValue::from_str(&e))?;
+            .map_err(|e| JsValue::from(e))?;
 
     Ok(FrameResult {
         data,

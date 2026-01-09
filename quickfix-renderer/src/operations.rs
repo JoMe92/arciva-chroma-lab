@@ -1,5 +1,5 @@
 use crate::{
-    ColorSettings, CropSettings, DenoiseSettings, ExposureSettings, GeometrySettings,
+    ColorSettings, CropSettings, CurvesSettings, DenoiseSettings, ExposureSettings, GeometrySettings,
     GrainSettings, QuickFixAdjustments,
 };
 use image::{ImageBuffer, Rgba, RgbaImage};
@@ -66,6 +66,11 @@ pub fn process_frame_internal(
     // 4. Color
     if let Some(col) = &adjustments.color {
         apply_color_balance_in_place(&mut img, col);
+    }
+
+    // 4.5 Curves
+    if let Some(curves) = &adjustments.curves {
+        apply_curves_in_place(&mut img, curves);
     }
 
     // 5. LUT
@@ -595,6 +600,142 @@ fn yuv_to_rgb(yuv: [f32; 3]) -> [f32; 3] {
     [r, g, b]
 }
 
+pub(crate) fn apply_curves_in_place(img: &mut RgbaImage, settings: &CurvesSettings) {
+    let master_lut = settings
+        .master
+        .as_ref()
+        .map(|c| generate_curve_lut(&c.points))
+        .unwrap_or_else(|| (0..256).map(|i| i as f32 / 255.0).collect());
+
+    let red_lut = settings
+        .red
+        .as_ref()
+        .map(|c| generate_curve_lut(&c.points))
+        .unwrap_or_else(|| (0..256).map(|i| i as f32 / 255.0).collect());
+
+    let green_lut = settings
+        .green
+        .as_ref()
+        .map(|c| generate_curve_lut(&c.points))
+        .unwrap_or_else(|| (0..256).map(|i| i as f32 / 255.0).collect());
+
+    let blue_lut = settings
+        .blue
+        .as_ref()
+        .map(|c| generate_curve_lut(&c.points))
+        .unwrap_or_else(|| (0..256).map(|i| i as f32 / 255.0).collect());
+
+    // Combine Master and RGB luts
+    let mut combined_r = [0u8; 256];
+    let mut combined_g = [0u8; 256];
+    let mut combined_b = [0u8; 256];
+
+    for i in 0..256 {
+        // Apply master first, then channel curve
+        let m = master_lut[i];
+        // For channel curves, we need to interpolate because master might map to non-integer
+        let r = sample_lut_linear(&red_lut, m);
+        let g = sample_lut_linear(&green_lut, m);
+        let b = sample_lut_linear(&blue_lut, m);
+
+        combined_r[i] = clamp_u8(r * 255.0);
+        combined_g[i] = clamp_u8(g * 255.0);
+        combined_b[i] = clamp_u8(b * 255.0);
+    }
+
+    for pixel in img.pixels_mut() {
+        pixel[0] = combined_r[pixel[0] as usize];
+        pixel[1] = combined_g[pixel[1] as usize];
+        pixel[2] = combined_b[pixel[2] as usize];
+    }
+}
+
+fn sample_lut_linear(lut: &[f32], x: f32) -> f32 {
+    let x = clamp(x, 0.0, 1.0) * 255.0;
+    let i = x.floor() as usize;
+    let f = x - i as f32;
+    if i >= 255 {
+        lut[255]
+    } else {
+        lut[i] * (1.0 - f) + lut[i + 1] * f
+    }
+}
+
+pub fn generate_curve_lut(points: &[crate::CurvePoint]) -> Vec<f32> {
+    if points.is_empty() {
+        return (0..256).map(|i| i as f32 / 255.0).collect();
+    }
+
+    // Sort points by X
+    let mut sorted_points = points.to_vec();
+    sorted_points.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap());
+
+    // Ensure we have 0 and 1
+    if sorted_points[0].x > 0.0 {
+        sorted_points.insert(0, crate::CurvePoint { x: 0.0, y: sorted_points[0].y });
+    }
+    if sorted_points.last().unwrap().x < 1.0 {
+        let last_y = sorted_points.last().unwrap().y;
+        sorted_points.push(crate::CurvePoint { x: 1.0, y: last_y });
+    }
+
+    if sorted_points.len() < 2 {
+        return (0..256).map(|i| i as f32 / 255.0).collect();
+    }
+
+    // Natural Cubic Spline
+    let n = sorted_points.len();
+    let mut h = vec![0.0; n - 1];
+    for i in 0..n - 1 {
+        h[i] = sorted_points[i + 1].x - sorted_points[i].x;
+        if h[i] == 0.0 { h[i] = 1e-6; } // Avoid division by zero
+    }
+
+    let mut alpha = vec![0.0; n - 1];
+    for i in 1..n - 1 {
+        alpha[i] = 3.0 / h[i] * (sorted_points[i + 1].y - sorted_points[i].y) - 3.0 / h[i - 1] * (sorted_points[i].y - sorted_points[i - 1].y);
+    }
+
+    let mut l = vec![1.0; n];
+    let mut mu = vec![0.0; n];
+    let mut z = vec![0.0; n];
+
+    for i in 1..n - 1 {
+        l[i] = 2.0 * (sorted_points[i + 1].x - sorted_points[i - 1].x) - h[i - 1] * mu[i - 1];
+        mu[i] = h[i] / l[i];
+        z[i] = (alpha[i] - h[i - 1] * z[i - 1]) / l[i];
+    }
+
+    let mut b = vec![0.0; n];
+    let mut c = vec![0.0; n];
+    let mut d = vec![0.0; n];
+
+    for j in (0..n - 1).rev() {
+        c[j] = z[j] - mu[j] * c[j + 1];
+        b[j] = (sorted_points[j + 1].y - sorted_points[j].y) / h[j] - h[j] * (c[j + 1] + 2.0 * c[j]) / 3.0;
+        d[j] = (c[j + 1] - c[j]) / (3.0 * h[j]);
+    }
+
+    let mut lut = Vec::with_capacity(256);
+    for i in 0..256 {
+        let x = i as f32 / 255.0;
+        // Find interval
+        let mut idx = n - 2;
+        for j in 0..n - 1 {
+            if x <= sorted_points[j + 1].x {
+                idx = j;
+                break;
+            }
+        }
+
+        let dx = x - sorted_points[idx].x;
+        let y = sorted_points[idx].y + b[idx] * dx + c[idx] * dx * dx + d[idx] * dx * dx * dx;
+        lut.push(clamp(y, 0.0, 1.0));
+    }
+
+    lut
+}
+
 pub(crate) fn apply_lut_in_place(
     img: &mut RgbaImage,
     lut_data: &[f32],
@@ -713,7 +854,10 @@ pub(crate) fn apply_lut_in_place(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ColorSettings, CropRect, CropSettings, ExposureSettings, GeometrySettings};
+    use crate::{
+        ChannelCurve, ColorSettings, CropRect, CropSettings, CurvePoint, CurvesSettings, ExposureSettings,
+        GeometrySettings,
+    };
 
     fn create_test_image(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {
         let mut img = RgbaImage::new(width, height);
@@ -932,5 +1076,57 @@ mod tests {
         // With high luminance denoise, center should drop significantly towards 100.
         // Let's assert it changed significantly
         assert!(center[0] < 195);
+    }
+
+    #[test]
+    fn test_spline_identity() {
+        // Curve points: (0,0), (0.5, 0.5), (1,1)
+        let points = vec![
+            crate::CurvePoint { x: 0.0, y: 0.0 },
+            crate::CurvePoint { x: 0.5, y: 0.5 },
+            crate::CurvePoint { x: 1.0, y: 1.0 },
+        ];
+        let lut = generate_curve_lut(&points);
+        assert_eq!(lut.len(), 256);
+        // Check few points. Index 128 is ~0.5.
+        // 128 / 255 = 0.5019...
+        assert!((lut[0] - 0.0).abs() < 1e-5);
+        assert!((lut[255] - 1.0).abs() < 1e-5);
+        assert!((lut[128] - (128.0 / 255.0)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_spline_nonlinear() {
+        // Curve that boosts shadows: (0,0), (0.25, 0.5), (1,1)
+        let points = vec![
+            crate::CurvePoint { x: 0.0, y: 0.0 },
+            crate::CurvePoint { x: 0.25, y: 0.5 },
+            crate::CurvePoint { x: 1.0, y: 1.0 },
+        ];
+        let lut = generate_curve_lut(&points);
+        // At 0.25 (index ~64), value should be ~0.5
+        let idx = (0.25 * 255.0) as usize;
+        assert!(lut[idx] > 0.45 && lut[idx] < 0.55);
+    }
+
+    #[test]
+    fn test_apply_curves() {
+        let mut img = create_test_image(10, 10, [64, 64, 64, 255]);
+        // Master curve that darkens: (0,0), (1, 0.5)
+        let settings = CurvesSettings {
+            master: Some(ChannelCurve {
+                points: vec![
+                    CurvePoint { x: 0.0, y: 0.0 },
+                    CurvePoint { x: 1.0, y: 0.5 },
+                ],
+            }),
+            ..Default::default()
+        };
+        apply_curves_in_place(&mut img, &settings);
+        let px = img.get_pixel(0, 0);
+        // 64 -> ~32
+        assert!(px[0] < 40);
+        assert!(px[1] < 40);
+        assert!(px[2] < 40);
     }
 }

@@ -62,6 +62,8 @@ struct Settings {
 @group(0) @binding(4) var s_grain: sampler;
 @group(0) @binding(5) var t_lut: texture_3d<f32>;
 @group(0) @binding(6) var s_lut: sampler;
+@group(0) @binding(7) var t_curves: texture_2d<f32>;
+@group(0) @binding(8) var s_curves: sampler;
 
 // Helper: Bicubic sampling
 fn cubic_hermite(a: f32, b: f32, c: f32, d: f32, t: f32) -> f32 {
@@ -411,6 +413,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         color = vec4<f32>(mix(color.rgb, lut_color.rgb, settings.lut_intensity), color.a); 
     }
 
+    // 5.5 Curves
+    // Sample curve LUT (256x1 texture)
+    let curve_r = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.r, 0.5), 0.0).r;
+    let curve_g = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.g, 0.5), 0.0).g;
+    let curve_b = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.b, 0.5), 0.0).b;
+    color = vec4<f32>(curve_r, curve_g, curve_b, color.a);
+
     // 6. Grain
     if (settings.grain_amount > 0.0) {
         // Sample grain texture
@@ -503,6 +512,7 @@ uniform sampler3D u_lut;
 uniform float u_lut_intensity;
 uniform float u_denoise_luminance;
 uniform float u_denoise_color;
+uniform sampler2D u_curves;
 
 // Helper: Cubic Hermite
 float cubic_hermite(float a, float b, float c, float d, float t) {
@@ -717,6 +727,11 @@ void main() {
         vec3 lut_col = texture(u_lut, color.rgb).rgb;
         color.rgb = mix(color.rgb, lut_col, u_lut_intensity);
     }
+    
+    // 5.5 Curves
+    color.r = texture(u_curves, vec2(color.r, 0.5)).r;
+    color.g = texture(u_curves, vec2(color.g, 0.5)).g;
+    color.b = texture(u_curves, vec2(color.b, 0.5)).b;
     
     // 6. Grain
     if (u_grain_amount > 0.0) {

@@ -127,10 +127,62 @@ function App() {
   };
 
   // Geometry Settings
-  const [geoVertical, setGeoVertical] = useState(0); // New
+  const [geoVertical, setGeoVertical] = useState(0);
   const [geoHorizontal, setGeoHorizontal] = useState(0); // New
   const [flipVertical, setFlipVertical] = useState(false);
   const [flipHorizontal, setFlipHorizontal] = useState(false);
+
+  // Curves State
+  const [curvePreset, setCurvePreset] = useState('identity');
+  const [curves, setCurves] = useState<any>(undefined);
+
+  const applyCurvePreset = (preset: string) => {
+    setCurvePreset(preset);
+    switch (preset) {
+      case 's-curve':
+        setCurves({
+          master: {
+            points: [
+              { x: 0.0, y: 0.0 },
+              { x: 0.25, y: 0.15 },
+              { x: 0.5, y: 0.5 },
+              { x: 0.75, y: 0.85 },
+              { x: 1.0, y: 1.0 },
+            ]
+          }
+        });
+        break;
+      case 'boost-red':
+        setCurves({
+          red: {
+            points: [
+              { x: 0.0, y: 0.0 },
+              { x: 0.5, y: 0.7 },
+              { x: 1.0, y: 1.0 },
+            ]
+          }
+        });
+        break;
+      case 'fade-blue':
+        setCurves({
+          blue: {
+            points: [
+              { x: 0.0, y: 0.2 },
+              { x: 1.0, y: 0.8 },
+            ]
+          }
+        });
+        break;
+      case 'shadow-warmth':
+        setCurves({
+          red: { points: [{ x: 0, y: 0 }, { x: 0.25, y: 0.35 }, { x: 1, y: 1 }] },
+          blue: { points: [{ x: 0, y: 0.1 }, { x: 0.25, y: 0.15 }, { x: 1, y: 1 }] }
+        });
+        break;
+      default:
+        setCurves(undefined);
+    }
+  };
 
   // Crop State
   // Draft state (what the sliders control)
@@ -297,7 +349,8 @@ function App() {
           horizontal: geoHorizontal,
           flipVertical: flipVertical,
           flipHorizontal: flipHorizontal
-        }
+        },
+        curves: curves
       };
 
       try {
@@ -398,7 +451,7 @@ function App() {
 
     render();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity, denoiseLuminance, denoiseColor]);
+  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity, denoiseLuminance, denoiseColor, curves]);
 
   // Handle Canvas Click for WB Picking
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -573,6 +626,22 @@ function App() {
             {lutName && <span style={{ fontSize: '0.8em', color: 'green' }}>Loaded: {lutName}</span>}
             <label>Intensity: {lutIntensity}</label>
             <input type="range" min="0" max="1" step="0.05" value={lutIntensity} onChange={e => setLutIntensity(parseFloat(e.target.value))} />
+          </div>
+
+          <h3>Curves</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+            <select value={curvePreset} onChange={(e) => applyCurvePreset(e.target.value)}>
+              <option value="identity">Default (Linear)</option>
+              <option value="s-curve">Master S-Curve (Contrast)</option>
+              <option value="boost-red">Tone: Red Boost</option>
+              <option value="fade-blue">Tone: Faded Blue</option>
+              <option value="shadow-warmth">Style: Shadow Warmth</option>
+            </select>
+            {curves && (
+              <pre style={{ fontSize: '0.6em', background: '#f5f5f5', padding: '5px', maxHeight: '100px', overflow: 'auto' }}>
+                {JSON.stringify(curves, null, 2)}
+              </pre>
+            )}
           </div>
 
           <h3>Geometry</h3>
