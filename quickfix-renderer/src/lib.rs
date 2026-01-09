@@ -135,6 +135,7 @@ pub struct ChannelCurve {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CurvesSettings {
+    pub intensity: f32,
     pub master: Option<ChannelCurve>,
     pub red: Option<ChannelCurve>,
     pub green: Option<ChannelCurve>,
@@ -220,6 +221,7 @@ export interface DenoiseSettings {
 }
 
 export interface CurvesSettings {
+    intensity: number;
     master?: ChannelCurve;
     red?: ChannelCurve;
     green?: ChannelCurve;

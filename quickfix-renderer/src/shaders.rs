@@ -53,6 +53,7 @@ struct Settings {
     // Denoise
     denoise_luminance: f32,
     denoise_color: f32, 
+    curves_intensity: f32,
 };
 
 @group(0) @binding(0) var<uniform> settings: Settings;
@@ -414,11 +415,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // 5.5 Curves
-    // Sample curve LUT (256x1 texture)
     let curve_r = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.r, 0.5), 0.0).r;
     let curve_g = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.g, 0.5), 0.0).g;
     let curve_b = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.b, 0.5), 0.0).b;
-    color = vec4<f32>(curve_r, curve_g, curve_b, color.a);
+    let curved_color = vec3<f32>(curve_r, curve_g, curve_b);
+    color = vec4<f32>(mix(color.rgb, curved_color, settings.curves_intensity), color.a);
 
     // 6. Grain
     if (settings.grain_amount > 0.0) {
@@ -513,6 +514,7 @@ uniform float u_lut_intensity;
 uniform float u_denoise_luminance;
 uniform float u_denoise_color;
 uniform sampler2D u_curves;
+uniform float u_curves_intensity;
 
 // Helper: Cubic Hermite
 float cubic_hermite(float a, float b, float c, float d, float t) {
@@ -729,9 +731,11 @@ void main() {
     }
     
     // 5.5 Curves
-    color.r = texture(u_curves, vec2(color.r, 0.5)).r;
-    color.g = texture(u_curves, vec2(color.g, 0.5)).g;
-    color.b = texture(u_curves, vec2(color.b, 0.5)).b;
+    vec3 curved_col;
+    curved_col.r = texture(u_curves, vec2(color.r, 0.5)).r;
+    curved_col.g = texture(u_curves, vec2(color.g, 0.5)).g;
+    curved_col.b = texture(u_curves, vec2(color.b, 0.5)).b;
+    color.rgb = mix(color.rgb, curved_col, u_curves_intensity);
     
     // 6. Grain
     if (u_grain_amount > 0.0) {

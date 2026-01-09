@@ -630,7 +630,10 @@ pub(crate) fn apply_curves_in_place(img: &mut RgbaImage, settings: &CurvesSettin
     let mut combined_g = [0u8; 256];
     let mut combined_b = [0u8; 256];
 
+    let intensity = settings.intensity;
+
     for i in 0..256 {
+        let original_f = i as f32 / 255.0;
         // Apply master first, then channel curve
         let m = master_lut[i];
         // For channel curves, we need to interpolate because master might map to non-integer
@@ -638,9 +641,14 @@ pub(crate) fn apply_curves_in_place(img: &mut RgbaImage, settings: &CurvesSettin
         let g = sample_lut_linear(&green_lut, m);
         let b = sample_lut_linear(&blue_lut, m);
 
-        combined_r[i] = clamp_u8(r * 255.0);
-        combined_g[i] = clamp_u8(g * 255.0);
-        combined_b[i] = clamp_u8(b * 255.0);
+        // Mix with original if intensity < 1.0
+        let r_final = original_f * (1.0 - intensity) + r * intensity;
+        let g_final = original_f * (1.0 - intensity) + g * intensity;
+        let b_final = original_f * (1.0 - intensity) + b * intensity;
+
+        combined_r[i] = clamp_u8(r_final * 255.0);
+        combined_g[i] = clamp_u8(g_final * 255.0);
+        combined_b[i] = clamp_u8(b_final * 255.0);
     }
 
     for pixel in img.pixels_mut() {

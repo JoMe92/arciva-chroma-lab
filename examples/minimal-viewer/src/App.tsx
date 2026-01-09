@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { QuickFixClient } from '../../../quickfix-renderer/pkg/client.js';
 import { RendererOptions } from 'quickfix-renderer';
 import { Histogram } from './Histogram';
+import { CurveEditor } from './CurveEditor';
+import type { CurvesSettings } from './CurveEditor';
 
 // Ported from geometry.rs to avoid WASM init on main thread
 function getOpaqueCrop(rotationDegrees: number, width: number, height: number) {
@@ -133,55 +135,12 @@ function App() {
   const [flipHorizontal, setFlipHorizontal] = useState(false);
 
   // Curves State
-  const [curvePreset, setCurvePreset] = useState('identity');
-  const [curves, setCurves] = useState<any>(undefined);
+  const [curves, setCurves] = useState<CurvesSettings>({
+    intensity: 1.0,
+  });
 
-  const applyCurvePreset = (preset: string) => {
-    setCurvePreset(preset);
-    switch (preset) {
-      case 's-curve':
-        setCurves({
-          master: {
-            points: [
-              { x: 0.0, y: 0.0 },
-              { x: 0.25, y: 0.15 },
-              { x: 0.5, y: 0.5 },
-              { x: 0.75, y: 0.85 },
-              { x: 1.0, y: 1.0 },
-            ]
-          }
-        });
-        break;
-      case 'boost-red':
-        setCurves({
-          red: {
-            points: [
-              { x: 0.0, y: 0.0 },
-              { x: 0.5, y: 0.7 },
-              { x: 1.0, y: 1.0 },
-            ]
-          }
-        });
-        break;
-      case 'fade-blue':
-        setCurves({
-          blue: {
-            points: [
-              { x: 0.0, y: 0.2 },
-              { x: 1.0, y: 0.8 },
-            ]
-          }
-        });
-        break;
-      case 'shadow-warmth':
-        setCurves({
-          red: { points: [{ x: 0, y: 0 }, { x: 0.25, y: 0.35 }, { x: 1, y: 1 }] },
-          blue: { points: [{ x: 0, y: 0.1 }, { x: 0.25, y: 0.15 }, { x: 1, y: 1 }] }
-        });
-        break;
-      default:
-        setCurves(undefined);
-    }
+  const setCurvesIntensity = (intensity: number) => {
+    setCurves(prev => ({ ...prev, intensity }));
   };
 
   // Crop State
@@ -533,184 +492,302 @@ function App() {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
-      <h1>Quick Fix GPU Renderer</h1>
-
-      <div>
-        <label>Backend: </label>
-        <select value={backend} onChange={(e) => setBackend(e.target.value)}>
-          <option value="auto">Auto</option>
-          <option value="webgpu">WebGPU</option>
-          <option value="webgl2">WebGL2</option>
-          <option value="cpu">CPU</option>
-        </select>
-        <span> Current: {currentBackend}</span>
-      </div>
-
-
-
-      <div style={{ display: 'flex', gap: '1rem' }}>
-        <canvas
-          ref={canvasRef}
-          key={backend}
-          onClick={handleCanvasClick}
-          style={{
-            border: '1px solid #ccc',
-            maxWidth: '100%',
-            maxHeight: '80vh',
-            objectFit: 'contain',
-            display: 'block',
-            cursor: isPickingWB ? 'crosshair' : 'default'
-          }}
-        />
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', minWidth: '300px' }}>
-          <h3>Exposure</h3>
-          <label>Exposure: {exposure}</label>
-          <input type="range" min="-2" max="2" step="0.1" value={exposure} onChange={e => setExposure(parseFloat(e.target.value))} />
-
-          <label>Contrast: {contrast}</label>
-          <input type="range" min="0.5" max="1.5" step="0.05" value={contrast} onChange={e => setContrast(parseFloat(e.target.value))} />
-
-          <label>Highlights: {highlights}</label>
-          <input type="range" min="-1" max="1" step="0.1" value={highlights} onChange={e => setHighlights(parseFloat(e.target.value))} />
-
-          <label>Shadows: {shadows}</label>
-          <input type="range" min="-1" max="1" step="0.1" value={shadows} onChange={e => setShadows(parseFloat(e.target.value))} />
-
-          <h3>Color</h3>
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
-            <button
-              onClick={() => setIsPickingWB(!isPickingWB)}
-              disabled={Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0}
-              title={Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0 ? "Reset Geometry/Rotation to pick WB" : "Click image to set White Balance"}
-              style={{
-                background: isPickingWB ? '#ddd' : '#f0f0f0',
-                border: '1px solid #999',
-                padding: '4px 8px',
-                cursor: (Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0) ? 'not-allowed' : 'pointer',
-                fontSize: '0.8rem',
-                opacity: (Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0) ? 0.5 : 1
-              }}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: '#111', color: '#eee', fontFamily: 'Inter, system-ui, sans-serif' }}>
+      <header style={{ padding: '0.5rem 1rem', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <h1 style={{ margin: 0, fontSize: '1.2rem' }}>Quick Fix GPU Renderer</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div>
+            <label style={{ fontSize: '0.8rem', opacity: 0.7 }}>Backend: </label>
+            <select
+              value={backend}
+              onChange={(e) => setBackend(e.target.value)}
+              style={{ background: '#222', color: '#eee', border: '1px solid #444', borderRadius: '4px', fontSize: '0.8rem' }}
             >
-              {isPickingWB ? 'Cancel Picker' : 'Pick Neutral Gray'}
-            </button>
-          </div>
-          <label>Temp: {temp}</label>
-          <input data-testid="temp-slider" type="range" min="-1" max="1" step="0.05" value={temp} onChange={e => setTemp(parseFloat(e.target.value))} />
-
-          <label>Tint: {tint}</label>
-          <input data-testid="tint-slider" type="range" min="-1" max="1" step="0.05" value={tint} onChange={e => setTint(parseFloat(e.target.value))} />
-
-          <h3>Grain</h3>
-          <label>Amount: {grainAmount}</label>
-          <input type="range" min="0" max="1" step="0.05" value={grainAmount} onChange={e => setGrainAmount(parseFloat(e.target.value))} />
-
-          <label>Size: {grainSize}</label>
-          <select value={grainSize} onChange={e => setGrainSize(e.target.value as 'fine' | 'medium' | 'coarse')}>
-            <option value="fine">Fine</option>
-            <option value="medium">Medium</option>
-            <option value="coarse">Coarse</option>
-          </select>
-
-          <h3>Denoise</h3>
-          <label>Luminance Noise: {denoiseLuminance}</label>
-          <input type="range" min="0" max="1" step="0.05" value={denoiseLuminance} onChange={e => setDenoiseLuminance(parseFloat(e.target.value))} />
-
-          <label>Color Noise: {denoiseColor}</label>
-          <input type="range" min="0" max="1" step="0.05" value={denoiseColor} onChange={e => setDenoiseColor(parseFloat(e.target.value))} />
-
-          <h3>LUT</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-            <input type="file" accept=".cube,.3dl,.xmp,.xml" onChange={handleLutUpload} />
-            {lutName && <span style={{ fontSize: '0.8em', color: 'green' }}>Loaded: {lutName}</span>}
-            <label>Intensity: {lutIntensity}</label>
-            <input type="range" min="0" max="1" step="0.05" value={lutIntensity} onChange={e => setLutIntensity(parseFloat(e.target.value))} />
-          </div>
-
-          <h3>Curves</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-            <select value={curvePreset} onChange={(e) => applyCurvePreset(e.target.value)}>
-              <option value="identity">Default (Linear)</option>
-              <option value="s-curve">Master S-Curve (Contrast)</option>
-              <option value="boost-red">Tone: Red Boost</option>
-              <option value="fade-blue">Tone: Faded Blue</option>
-              <option value="shadow-warmth">Style: Shadow Warmth</option>
+              <option value="auto">Auto</option>
+              <option value="webgpu">WebGPU</option>
+              <option value="webgl2">WebGL2</option>
+              <option value="cpu">CPU</option>
             </select>
-            {curves && (
-              <pre style={{ fontSize: '0.6em', background: '#f5f5f5', padding: '5px', maxHeight: '100px', overflow: 'auto' }}>
-                {JSON.stringify(curves, null, 2)}
-              </pre>
-            )}
           </div>
-
-          <h3>Geometry</h3>
-          <label>Rotation: {rotation}</label>
-          <input data-testid="rotation-slider" type="range" min="-45" max="45" step="1" value={rotation} onChange={e => setRotation(parseFloat(e.target.value))} />
-
-          <label>
-            <input type="checkbox" checked={autoCrop} onChange={e => setAutoCrop(e.target.checked)} />
-            Auto Crop (Straighten)
-          </label>
-
-          <label>Vertical Perspective: {geoVertical}</label>
-          <input type="range" min="-1" max="1" step="0.05" value={geoVertical} onChange={e => setGeoVertical(parseFloat(e.target.value))} />
-
-
-          <label>Horizontal Perspective: {geoHorizontal}</label>
-          <input type="range" min="-1" max="1" step="0.05" value={geoHorizontal} onChange={e => setGeoHorizontal(parseFloat(e.target.value))} />
-
-          <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <input type="checkbox" checked={flipHorizontal} onChange={e => setFlipHorizontal(e.target.checked)} />
-              Flip Horizontal
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <input type="checkbox" checked={flipVertical} onChange={e => setFlipVertical(e.target.checked)} />
-              Flip Vertical
-            </label>
-          </div>
-
-          <h3>Crop</h3>
-          <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-            <button onClick={applyCrop} disabled={!!appliedCrop}>Apply Crop</button>
-            <button onClick={resetCrop} disabled={!appliedCrop}>Reset Crop</button>
-          </div>
-
-          {!appliedCrop ? (
-            <>
-              <p style={{ fontSize: '0.8rem', color: '#666' }}>Adjust sliders to position crop box (Red).</p>
-              <label>X: {cropX.toFixed(2)}</label>
-              <input type="range" min="0" max="1" step="0.01" value={cropX} onChange={e => setCropX(parseFloat(e.target.value))} />
-              <label>Y: {cropY.toFixed(2)}</label>
-              <input type="range" min="0" max="1" step="0.01" value={cropY} onChange={e => setCropY(parseFloat(e.target.value))} />
-              <label>Width: {cropW.toFixed(2)}</label>
-              <input type="range" min="0" max="1" step="0.01" value={cropW} onChange={e => setCropW(parseFloat(e.target.value))} />
-              <label>Height: {cropH.toFixed(2)}</label>
-              <input type="range" min="0" max="1" step="0.01" value={cropH} onChange={e => setCropH(parseFloat(e.target.value))} />
-            </>
-          ) : (
-            <div>
-              <p>Crop Applied. Click Reset to adjust.</p>
-              <pre style={{ fontSize: '0.7em', background: '#eee', padding: '5px' }}>
-                {JSON.stringify(appliedCrop, null, 2)}
-              </pre>
-            </div>
-          )}
-
-          <div style={{ marginTop: '1rem', borderTop: '1px solid #eee', paddingTop: '0.5rem' }}>
-            <h3>Histogram</h3>
-            <Histogram data={histogramData} />
-          </div>
-
-          <div style={{ marginTop: '1rem', borderTop: '1px solid #eee', paddingTop: '0.5rem' }}>
-            <h4>Debug Info</h4>
-            <div>WB Mode: {isPickingWB ? 'ACTIVE' : 'Inactive'}</div>
-            <div>Backend: {currentBackend}</div>
-            <div>Canvas Size: {canvasRef.current ? `${canvasRef.current.width}x${canvasRef.current.height}` : 'N/A'}</div>
-            <div>Image Size: {image ? `${image.width}x${image.height}` : 'N/A'}</div>
-          </div>
+          <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Current: {currentBackend}</span>
         </div>
+      </header>
+
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        <main style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem', overflow: 'auto', background: '#000' }}>
+          <canvas
+            ref={canvasRef}
+            key={backend}
+            onClick={handleCanvasClick}
+            style={{
+              border: '1px solid #333',
+              maxWidth: '100%',
+              maxHeight: '100%',
+              objectFit: 'contain',
+              display: 'block',
+              cursor: isPickingWB ? 'crosshair' : 'default',
+              boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
+            }}
+          />
+        </main>
+
+        <aside style={{
+          width: '350px',
+          borderLeft: '1px solid #333',
+          overflowY: 'auto',
+          padding: '1.5rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '1.5rem',
+          background: '#111'
+        }}>
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Exposure</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Exposure</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{exposure}</span>
+                </div>
+                <input type="range" min="-2" max="2" step="0.1" value={exposure} onChange={e => setExposure(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Contrast</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{contrast}</span>
+                </div>
+                <input type="range" min="0.5" max="1.5" step="0.05" value={contrast} onChange={e => setContrast(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Highlights</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{highlights}</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.1" value={highlights} onChange={e => setHighlights(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Shadows</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{shadows}</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.1" value={shadows} onChange={e => setShadows(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Color</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <button
+                onClick={() => setIsPickingWB(!isPickingWB)}
+                disabled={Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0}
+                title={Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0 ? "Reset Geometry/Rotation to pick WB" : "Click image to set White Balance"}
+                style={{
+                  background: isPickingWB ? '#444' : '#222',
+                  color: '#eee',
+                  border: '1px solid #444',
+                  padding: '6px 12px',
+                  borderRadius: '4px',
+                  cursor: (Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0) ? 'not-allowed' : 'pointer',
+                  fontSize: '0.8rem',
+                  width: '100%',
+                  opacity: (Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0) ? 0.5 : 1
+                }}
+              >
+                {isPickingWB ? 'Cancel Picker' : 'Pick Neutral Gray'}
+              </button>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Temp</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{temp.toFixed(2)}</span>
+                </div>
+                <input data-testid="temp-slider" type="range" min="-1" max="1" step="0.05" value={temp} onChange={e => setTemp(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Tint</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{tint.toFixed(2)}</span>
+                </div>
+                <input data-testid="tint-slider" type="range" min="-1" max="1" step="0.05" value={tint} onChange={e => setTint(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Grain</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Amount</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{grainAmount}</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.05" value={grainAmount} onChange={e => setGrainAmount(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.85rem', display: 'block', marginBottom: '0.3rem' }}>Size</label>
+                <select
+                  value={grainSize}
+                  onChange={e => setGrainSize(e.target.value as 'fine' | 'medium' | 'coarse')}
+                  style={{ width: '100%', background: '#222', color: '#eee', border: '1px solid #444', padding: '4px', borderRadius: '4px' }}
+                >
+                  <option value="fine">Fine</option>
+                  <option value="medium">Medium</option>
+                  <option value="coarse">Coarse</option>
+                </select>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Denoise</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Luminance</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{denoiseLuminance}</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.05" value={denoiseLuminance} onChange={e => setDenoiseLuminance(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Color</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{denoiseColor}</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.05" value={denoiseColor} onChange={e => setDenoiseColor(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>LUT</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <input type="file" accept=".cube,.3dl,.xmp,.xml" onChange={handleLutUpload} style={{ fontSize: '0.8rem' }} />
+              {lutName && <span style={{ fontSize: '0.75rem', color: '#4caf50' }}>Loaded: {lutName}</span>}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Intensity</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{lutIntensity}</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.05" value={lutIntensity} onChange={e => setLutIntensity(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Curves</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Curve Strength</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{curves.intensity}</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.05" value={curves.intensity} onChange={e => setCurvesIntensity(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+              <CurveEditor curves={curves} onChange={setCurves} />
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Geometry</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Rotation</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{rotation}°</span>
+                </div>
+                <input data-testid="rotation-slider" type="range" min="-45" max="45" step="1" value={rotation} onChange={e => setRotation(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
+                <input type="checkbox" checked={autoCrop} onChange={e => setAutoCrop(e.target.checked)} />
+                Auto Crop (Straighten)
+              </label>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Vertical Perspective</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{geoVertical}</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.05" value={geoVertical} onChange={e => setGeoVertical(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Horizontal Perspective</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{geoHorizontal}</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.05" value={geoHorizontal} onChange={e => setGeoHorizontal(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
+                  <input type="checkbox" checked={flipHorizontal} onChange={e => setFlipHorizontal(e.target.checked)} />
+                  Flip Horizontal
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
+                  <input type="checkbox" checked={flipVertical} onChange={e => setFlipVertical(e.target.checked)} />
+                  Flip Vertical
+                </label>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Crop</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button onClick={applyCrop} disabled={!!appliedCrop} style={{ flex: 1, padding: '6px', fontSize: '0.8rem' }}>Apply</button>
+                <button onClick={resetCrop} disabled={!appliedCrop} style={{ flex: 1, padding: '6px', fontSize: '0.8rem' }}>Reset</button>
+              </div>
+
+              {!appliedCrop ? (
+                <>
+                  <p style={{ fontSize: '0.75rem', color: '#aaa', margin: 0 }}>Adjust red box on canvas.</p>
+                  <div>
+                    <label style={{ fontSize: '0.8rem' }}>X: {cropX.toFixed(2)}</label>
+                    <input type="range" min="0" max="1" step="0.01" value={cropX} onChange={e => setCropX(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem' }}>Y: {cropY.toFixed(2)}</label>
+                    <input type="range" min="0" max="1" step="0.01" value={cropY} onChange={e => setCropY(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem' }}>W: {cropW.toFixed(2)}</label>
+                    <input type="range" min="0" max="1" step="0.01" value={cropW} onChange={e => setCropW(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem' }}>H: {cropH.toFixed(2)}</label>
+                    <input type="range" min="0" max="1" step="0.01" value={cropH} onChange={e => setCropH(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: '0.75rem', background: '#222', padding: '0.5rem', borderRadius: '4px' }}>
+                  <p style={{ margin: '0 0 0.3rem 0' }}>Crop Applied.</p>
+                  <pre style={{ margin: 0 }}>{JSON.stringify(appliedCrop, null, 2)}</pre>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Histogram</h3>
+            <Histogram data={histogramData} />
+          </section>
+
+          <section style={{ opacity: 0.6, fontSize: '0.8rem', borderTop: '1px solid #333', paddingTop: '1rem' }}>
+            <h4 style={{ margin: '0 0 0.5rem 0' }}>Debug Info</h4>
+            <div>WB Mode: {isPickingWB ? 'ACTIVE' : 'Inactive'}</div>
+            <div>Canvas: {canvasRef.current ? `${canvasRef.current.width}x${canvasRef.current.height}` : 'N/A'}</div>
+            <div>Image: {image ? `${image.width}x${image.height}` : 'N/A'}</div>
+          </section>
+        </aside>
       </div>
     </div>
   );
