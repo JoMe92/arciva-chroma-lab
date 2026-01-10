@@ -58,32 +58,32 @@ pub fn process_frame_internal(
         img = apply_crop_rotate(&img, crop);
     }
 
-    // 3. Exposure
-    if let Some(exp) = &adjustments.exposure {
-        apply_exposure_in_place(&mut img, exp);
-    }
-
-    // 4. Color
-    if let Some(col) = &adjustments.color {
-        apply_color_balance_in_place(&mut img, col);
-    }
-
-    // 4.5 Curves
-    if let Some(curves) = &adjustments.curves {
-        apply_curves_in_place(&mut img, curves);
-    }
-
-    // 5. LUT
-    if let (Some(lut_settings), Some((lut_data, lut_size))) = (&adjustments.lut, lut_buffer) {
-        apply_lut_in_place(&mut img, lut_data, lut_size, lut_settings);
-    }
-
-    // 6. Denoise
+    // 3. Denoise
     if let Some(denoise) = &adjustments.denoise {
         apply_denoise_in_place(&mut img, denoise);
     }
 
-    // 7. Grain
+    // 4. Exposure
+    if let Some(exp) = &adjustments.exposure {
+        apply_exposure_in_place(&mut img, exp);
+    }
+
+    // 5. Color
+    if let Some(col) = &adjustments.color {
+        apply_color_balance_in_place(&mut img, col);
+    }
+
+    // 6. Curves
+    if let Some(curves) = &adjustments.curves {
+        apply_curves_in_place(&mut img, curves);
+    }
+
+    // 7. LUT
+    if let (Some(lut_settings), Some((lut_data, lut_size))) = (&adjustments.lut, lut_buffer) {
+        apply_lut_in_place(&mut img, lut_data, lut_size, lut_settings);
+    }
+
+    // 8. Grain
     if let Some(grain) = &adjustments.grain {
         apply_grain_in_place(&mut img, grain);
     }

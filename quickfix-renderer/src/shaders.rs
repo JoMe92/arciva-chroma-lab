@@ -402,24 +402,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         );
     }
     
-    // 5. LUT
-    if (settings.lut_intensity > 0.0) {
-        // Map color to 0..1 (it is already)
-        // Texture 3D sampling
-        // Color is the coordinate.
-        // We need a sampler and texture.
-        // Assuming we add binding 5 and 6 for LUT.
-        let lut_color = textureSample(t_lut, s_lut, color.rgb);
-        
-        color = vec4<f32>(mix(color.rgb, lut_color.rgb, settings.lut_intensity), color.a); 
-    }
-
-    // 5.5 Curves
+    // 5. Curves
     let curve_r = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.r, 0.5), 0.0).r;
     let curve_g = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.g, 0.5), 0.0).g;
     let curve_b = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.b, 0.5), 0.0).b;
     let curved_color = vec3<f32>(curve_r, curve_g, curve_b);
     color = vec4<f32>(mix(color.rgb, curved_color, settings.curves_intensity), color.a);
+
+    // 5.5 LUT
+    if (settings.lut_intensity > 0.0) {
+        let lut_color = textureSample(t_lut, s_lut, color.rgb);
+        color = vec4<f32>(mix(color.rgb, lut_color.rgb, settings.lut_intensity), color.a); 
+    }
 
     // 6. Grain
     if (settings.grain_amount > 0.0) {
@@ -724,18 +718,18 @@ void main() {
         color.b *= temp_b * tint_rb;
     }
     
-    // 5. LUT 
-    if (u_lut_intensity > 0.0) {
-        vec3 lut_col = texture(u_lut, color.rgb).rgb;
-        color.rgb = mix(color.rgb, lut_col, u_lut_intensity);
-    }
-    
-    // 5.5 Curves
+    // 5. Curves
     vec3 curved_col;
     curved_col.r = texture(u_curves, vec2(color.r, 0.5)).r;
     curved_col.g = texture(u_curves, vec2(color.g, 0.5)).g;
     curved_col.b = texture(u_curves, vec2(color.b, 0.5)).b;
     color.rgb = mix(color.rgb, curved_col, u_curves_intensity);
+
+    // 5.5 LUT 
+    if (u_lut_intensity > 0.0) {
+        vec3 lut_col = texture(u_lut, color.rgb).rgb;
+        color.rgb = mix(color.rgb, lut_col, u_lut_intensity);
+    }
     
     // 6. Grain
     if (u_grain_amount > 0.0) {
