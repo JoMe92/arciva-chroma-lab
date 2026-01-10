@@ -10,6 +10,7 @@ export interface ChannelCurve {
 }
 
 export interface CurvesSettings {
+    intensity?: number;
     master?: ChannelCurve;
     red?: ChannelCurve;
     green?: ChannelCurve;

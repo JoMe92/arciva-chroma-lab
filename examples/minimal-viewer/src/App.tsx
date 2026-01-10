@@ -509,7 +509,10 @@ function App() {
               <option value="cpu">CPU</option>
             </select>
           </div>
-          <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Current: {currentBackend}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem' }}>
+            <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Current: {currentBackend}</span>
+            <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Image Size: {image?.width}x{image?.height}</span>
+          </div>
         </div>
       </header>
 
@@ -531,7 +534,7 @@ function App() {
           />
         </main>
 
-        <aside style={{
+        <aside aria-label="Sidebar controls" style={{
           width: '350px',
           borderLeft: '1px solid #333',
           overflowY: 'auto',
@@ -688,7 +691,7 @@ function App() {
                   <label style={{ fontSize: '0.85rem' }}>Curve Strength</label>
                   <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{curves.intensity}</span>
                 </div>
-                <input type="range" min="0" max="1" step="0.05" value={curves.intensity} onChange={e => setCurvesIntensity(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                <input data-testid="curve-strength-slider" type="range" min="0" max="1" step="0.05" value={curves.intensity} onChange={e => setCurvesIntensity(parseFloat(e.target.value))} style={{ width: '100%' }} />
               </div>
               <CurveEditor curves={curves} onChange={setCurves} />
             </div>

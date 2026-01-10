@@ -356,10 +356,26 @@ impl WebGlRenderer {
             // Curves Texture (256x1, 3 channels)
             let curves_texture = gl.create_texture().map_err(RendererError::InitFailed)?;
             gl.bind_texture(glow::TEXTURE_2D, Some(curves_texture));
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR as i32,
+            );
             self.curves_dirty = true;
 
             self.context = Some(gl);
@@ -450,22 +466,57 @@ impl WebGlRenderer {
         gl.bind_texture(glow::TEXTURE_2D, self.curves_texture);
         if let Some(curves) = &settings.curves {
             // Generate combined curves LUT
-            let master = crate::operations::generate_curve_lut(&curves.master.as_ref().map(|c| c.points.clone()).unwrap_or_default());
-            let red = crate::operations::generate_curve_lut(&curves.red.as_ref().map(|c| c.points.clone()).unwrap_or_default());
-            let green = crate::operations::generate_curve_lut(&curves.green.as_ref().map(|c| c.points.clone()).unwrap_or_default());
-            let blue = crate::operations::generate_curve_lut(&curves.blue.as_ref().map(|c| c.points.clone()).unwrap_or_default());
+            let master = crate::operations::generate_curve_lut(
+                &curves
+                    .master
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let red = crate::operations::generate_curve_lut(
+                &curves
+                    .red
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let green = crate::operations::generate_curve_lut(
+                &curves
+                    .green
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let blue = crate::operations::generate_curve_lut(
+                &curves
+                    .blue
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
 
             let mut combined_data = Vec::with_capacity(256 * 3);
-            for i in 0..256 {
-                let m = master[i];
+            for &m in &master {
                 let rx = (m * 255.0).clamp(0.0, 255.0);
                 let ri = rx.floor() as usize;
                 let rf = rx - ri as f32;
-                
-                let r = if ri >= 255 { red[255] } else { red[ri] * (1.0 - rf) + red[ri+1] * rf };
-                let g = if ri >= 255 { green[255] } else { green[ri] * (1.0 - rf) + green[ri+1] * rf };
-                let b = if ri >= 255 { blue[255] } else { blue[ri] * (1.0 - rf) + blue[ri+1] * rf };
-                
+
+                let r = if ri >= 255 {
+                    red[255]
+                } else {
+                    red[ri] * (1.0 - rf) + red[ri + 1] * rf
+                };
+                let g = if ri >= 255 {
+                    green[255]
+                } else {
+                    green[ri] * (1.0 - rf) + green[ri + 1] * rf
+                };
+                let b = if ri >= 255 {
+                    blue[255]
+                } else {
+                    blue[ri] * (1.0 - rf) + blue[ri + 1] * rf
+                };
+
                 combined_data.push(r);
                 combined_data.push(g);
                 combined_data.push(b);

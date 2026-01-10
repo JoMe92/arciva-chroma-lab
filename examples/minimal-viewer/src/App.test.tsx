@@ -202,4 +202,28 @@ describe('App Integration', () => {
         // Also verify the button is now disabled
         expect(pickButton).toBeDisabled();
     });
+
+    it('renders with a scrollable sidebar and curve strength slider', async () => {
+        render(<App />);
+
+        // Wait for load
+        await waitFor(() => {
+            const backendElements = screen.getAllByText(/Backend/i);
+            expect(backendElements.length).toBeGreaterThan(0);
+        });
+
+        // 1. Verify sidebar exists and has correct styles for scrolling
+        const sidebar = screen.getByRole('complementary');
+        expect(sidebar).toBeInTheDocument();
+        // The sidebar should have overflowY: auto
+        expect(sidebar).toHaveStyle({ overflowY: 'auto' });
+
+        // 2. Verify "Curve Strength" slider exists
+        const curveStrengthSlider = screen.getByTestId('curve-strength-slider');
+        expect(curveStrengthSlider).toBeInTheDocument();
+        expect(curveStrengthSlider).toHaveValue('1');
+
+        // 3. Verify it's labeled correctly
+        expect(screen.getByText(/Curve Strength/i)).toBeInTheDocument();
+    });
 });

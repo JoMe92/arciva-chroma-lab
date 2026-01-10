@@ -287,7 +287,7 @@ pub fn process_frame_sync(
     // Sync version does not support LUT for now
     let (data, w, h, histogram) =
         operations::process_frame_internal(data, width, height, &adjustments, None)
-            .map_err(|e| JsValue::from(e))?;
+            .map_err(JsValue::from)?;
 
     Ok(FrameResult {
         data,

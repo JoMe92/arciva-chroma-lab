@@ -1,6 +1,6 @@
 use crate::{
-    ColorSettings, CropSettings, CurvesSettings, DenoiseSettings, ExposureSettings, GeometrySettings,
-    GrainSettings, QuickFixAdjustments,
+    ColorSettings, CropSettings, CurvesSettings, DenoiseSettings, ExposureSettings,
+    GeometrySettings, GrainSettings, QuickFixAdjustments,
 };
 use image::{ImageBuffer, Rgba, RgbaImage};
 use rand::SeedableRng;
@@ -680,7 +680,13 @@ pub fn generate_curve_lut(points: &[crate::CurvePoint]) -> Vec<f32> {
 
     // Ensure we have 0 and 1
     if sorted_points[0].x > 0.0 {
-        sorted_points.insert(0, crate::CurvePoint { x: 0.0, y: sorted_points[0].y });
+        sorted_points.insert(
+            0,
+            crate::CurvePoint {
+                x: 0.0,
+                y: sorted_points[0].y,
+            },
+        );
     }
     if sorted_points.last().unwrap().x < 1.0 {
         let last_y = sorted_points.last().unwrap().y;
@@ -696,12 +702,15 @@ pub fn generate_curve_lut(points: &[crate::CurvePoint]) -> Vec<f32> {
     let mut h = vec![0.0; n - 1];
     for i in 0..n - 1 {
         h[i] = sorted_points[i + 1].x - sorted_points[i].x;
-        if h[i] == 0.0 { h[i] = 1e-6; } // Avoid division by zero
+        if h[i] == 0.0 {
+            h[i] = 1e-6;
+        } // Avoid division by zero
     }
 
     let mut alpha = vec![0.0; n - 1];
     for i in 1..n - 1 {
-        alpha[i] = 3.0 / h[i] * (sorted_points[i + 1].y - sorted_points[i].y) - 3.0 / h[i - 1] * (sorted_points[i].y - sorted_points[i - 1].y);
+        alpha[i] = 3.0 / h[i] * (sorted_points[i + 1].y - sorted_points[i].y)
+            - 3.0 / h[i - 1] * (sorted_points[i].y - sorted_points[i - 1].y);
     }
 
     let mut l = vec![1.0; n];
@@ -720,7 +729,8 @@ pub fn generate_curve_lut(points: &[crate::CurvePoint]) -> Vec<f32> {
 
     for j in (0..n - 1).rev() {
         c[j] = z[j] - mu[j] * c[j + 1];
-        b[j] = (sorted_points[j + 1].y - sorted_points[j].y) / h[j] - h[j] * (c[j + 1] + 2.0 * c[j]) / 3.0;
+        b[j] = (sorted_points[j + 1].y - sorted_points[j].y) / h[j]
+            - h[j] * (c[j + 1] + 2.0 * c[j]) / 3.0;
         d[j] = (c[j + 1] - c[j]) / (3.0 * h[j]);
     }
 
@@ -863,8 +873,8 @@ pub(crate) fn apply_lut_in_place(
 mod tests {
     use super::*;
     use crate::{
-        ChannelCurve, ColorSettings, CropRect, CropSettings, CurvePoint, CurvesSettings, ExposureSettings,
-        GeometrySettings,
+        ChannelCurve, ColorSettings, CropRect, CropSettings, CurvePoint, CurvesSettings,
+        ExposureSettings, GeometrySettings,
     };
 
     fn create_test_image(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {
@@ -1122,11 +1132,9 @@ mod tests {
         let mut img = create_test_image(10, 10, [64, 64, 64, 255]);
         // Master curve that darkens: (0,0), (1, 0.5)
         let settings = CurvesSettings {
+            intensity: 1.0,
             master: Some(ChannelCurve {
-                points: vec![
-                    CurvePoint { x: 0.0, y: 0.0 },
-                    CurvePoint { x: 1.0, y: 0.5 },
-                ],
+                points: vec![CurvePoint { x: 0.0, y: 0.0 }, CurvePoint { x: 1.0, y: 0.5 }],
             }),
             ..Default::default()
         };
@@ -1136,5 +1144,26 @@ mod tests {
         assert!(px[0] < 40);
         assert!(px[1] < 40);
         assert!(px[2] < 40);
+    }
+
+    #[test]
+    fn test_apply_curves_intensity() {
+        let mut img = create_test_image(1, 1, [100, 100, 100, 255]);
+        // Curve that would map 100 to ~200
+        let settings = CurvesSettings {
+            intensity: 0.5,
+            master: Some(ChannelCurve {
+                points: vec![
+                    CurvePoint { x: 0.0, y: 0.0 },
+                    CurvePoint { x: 1.0, y: 1.0 },
+                    CurvePoint { x: 0.392, y: 0.784 }, // 100/255 -> 200/255 approx
+                ],
+            }),
+            ..Default::default()
+        };
+        apply_curves_in_place(&mut img, &settings);
+        let px = img.get_pixel(0, 0);
+        // Original: 100, Full curve: 200. Intensity 0.5 -> 150.
+        assert!(px[0] > 140 && px[0] < 160);
     }
 }
