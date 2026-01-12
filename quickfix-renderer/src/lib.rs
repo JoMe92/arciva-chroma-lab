@@ -144,11 +144,33 @@ pub struct CurvesSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct HslRangeSettings {
+    pub hue: f32, // Offset degrees or normalized? Let's use -1.0 to 1.0 (mapped to e.g. -30 to 30 deg)
+    pub saturation: f32, // -1.0 to 1.0 (offset)
+    pub luminance: f32, // -1.0 to 1.0 (offset)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HslSettings {
+    pub red: HslRangeSettings,
+    pub orange: HslRangeSettings,
+    pub yellow: HslRangeSettings,
+    pub green: HslRangeSettings,
+    pub aqua: HslRangeSettings,
+    pub blue: HslRangeSettings,
+    pub purple: HslRangeSettings,
+    pub magenta: HslRangeSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct QuickFixAdjustments {
     pub crop: Option<CropSettings>,
     pub exposure: Option<ExposureSettings>,
     pub color: Option<ColorSettings>,
     pub curves: Option<CurvesSettings>,
+    pub hsl: Option<HslSettings>,
     pub grain: Option<GrainSettings>,
     pub geometry: Option<GeometrySettings>,
     pub denoise: Option<DenoiseSettings>,
@@ -228,6 +250,23 @@ export interface CurvesSettings {
     blue?: ChannelCurve;
 }
 
+export interface HslRangeSettings {
+    hue: number;
+    saturation: number;
+    luminance: number;
+}
+
+export interface HslSettings {
+    red: HslRangeSettings;
+    orange: HslRangeSettings;
+    yellow: HslRangeSettings;
+    green: HslRangeSettings;
+    aqua: HslRangeSettings;
+    blue: HslRangeSettings;
+    purple: HslRangeSettings;
+    magenta: HslRangeSettings;
+}
+
 export interface ChannelCurve {
     points: CurvePoint[];
 }
@@ -242,6 +281,7 @@ export interface QuickFixAdjustments {
     exposure?: ExposureSettings;
     color?: ColorSettings;
     curves?: CurvesSettings;
+    hsl?: HslSettings;
     grain?: GrainSettings;
     geometry?: GeometrySettings;
     denoise?: DenoiseSettings;

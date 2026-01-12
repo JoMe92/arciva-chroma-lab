@@ -1,6 +1,6 @@
 use crate::{
     ColorSettings, CropSettings, CurvesSettings, DenoiseSettings, ExposureSettings,
-    GeometrySettings, GrainSettings, QuickFixAdjustments,
+    GeometrySettings, GrainSettings, HslSettings, QuickFixAdjustments,
 };
 use image::{ImageBuffer, Rgba, RgbaImage};
 use rand::SeedableRng;
@@ -78,12 +78,17 @@ pub fn process_frame_internal(
         apply_curves_in_place(&mut img, curves);
     }
 
-    // 7. LUT
+    // 7. HSL
+    if let Some(hsl) = &adjustments.hsl {
+        apply_hsl_in_place(&mut img, hsl);
+    }
+
+    // 8. LUT
     if let (Some(lut_settings), Some((lut_data, lut_size))) = (&adjustments.lut, lut_buffer) {
         apply_lut_in_place(&mut img, lut_data, lut_size, lut_settings);
     }
 
-    // 8. Grain
+    // 9. Grain
     if let Some(grain) = &adjustments.grain {
         apply_grain_in_place(&mut img, grain);
     }
@@ -598,6 +603,141 @@ fn yuv_to_rgb(yuv: [f32; 3]) -> [f32; 3] {
     let g = y - 0.39465 * u - 0.58060 * v;
     let b = y + 2.03211 * u;
     [r, g, b]
+}
+
+fn rgb_to_hsl(rgb: [f32; 3]) -> [f32; 3] {
+    let r = rgb[0];
+    let g = rgb[1];
+    let b = rgb[2];
+
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+
+    let mut h = 0.0;
+    if delta > 0.0 {
+        if max == r {
+            h = (g - b) / delta % 6.0;
+        } else if max == g {
+            h = (b - r) / delta + 2.0;
+        } else {
+            h = (r - g) / delta + 4.0;
+        }
+        h /= 6.0;
+        if h < 0.0 {
+            h += 1.0;
+        }
+    }
+
+    let l = (max + min) / 2.0;
+    let s = if delta == 0.0 {
+        0.0
+    } else {
+        delta / (1.0 - (2.0 * l - 1.0).abs())
+    };
+
+    [h, s, l]
+}
+
+fn hsl_to_rgb(hsl: [f32; 3]) -> [f32; 3] {
+    let h = hsl[0];
+    let s = hsl[1];
+    let l = hsl[2];
+
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h * 6.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+
+    let (r, g, b) = if h < 1.0 / 6.0 {
+        (c, x, 0.0)
+    } else if h < 2.0 / 6.0 {
+        (x, c, 0.0)
+    } else if h < 3.0 / 6.0 {
+        (0.0, c, x)
+    } else if h < 4.0 / 6.0 {
+        (0.0, x, c)
+    } else if h < 5.0 / 6.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+
+    [r + m, g + m, b + m]
+}
+
+pub(crate) fn apply_hsl_in_place(img: &mut RgbaImage, settings: &HslSettings) {
+    // Range centers in Hue (0..1)
+    // Red (0), Orange (30), Yellow (60), Green (120), Aqua (180), Blue (240), Purple (270), Magenta (300)
+    // Actually standard 8-range is often:
+    // Red: 0/360
+    // Orange: 30
+    // Yellow: 60
+    // Green: 120
+    // Aqua/Cyan: 180
+    // Blue: 240
+    // Purple/Violet: 270
+    // Magenta: 300
+
+    let ranges = [
+        (0.0 / 360.0, &settings.red),
+        (30.0 / 360.0, &settings.orange),
+        (60.0 / 360.0, &settings.yellow),
+        (120.0 / 360.0, &settings.green),
+        (180.0 / 360.0, &settings.aqua),
+        (240.0 / 360.0, &settings.blue),
+        (270.0 / 360.0, &settings.purple),
+        (300.0 / 360.0, &settings.magenta),
+    ];
+
+    for pixel in img.pixels_mut() {
+        let r_in = pixel[0] as f32 / 255.0;
+        let g_in = pixel[1] as f32 / 255.0;
+        let b_in = pixel[2] as f32 / 255.0;
+        let a = pixel[3];
+
+        let mut hsl = rgb_to_hsl([r_in, g_in, b_in]);
+        let h = hsl[0];
+
+        let mut delta_h = 0.0;
+        let mut delta_s = 0.0;
+        let mut delta_l = 0.0;
+
+        for (center, s) in ranges.iter() {
+            // Hue distance with wrapping
+            let mut dist = (h - center).abs();
+            if dist > 0.5 {
+                dist = 1.0 - dist;
+            }
+
+            // Falloff: using a simple bell curve or linear falloff
+            // Width of influence. Typically ranges overlap.
+            // Let's use 60 deg (1/6) as total width of influence (30 deg each side).
+            let width = 60.0 / 360.0;
+            if dist < width {
+                // Quadratic falloff for smoothness
+                let t = dist / width;
+                let weight = 1.0 - t * t * (3.0 - 2.0 * t); // Smoothstep-like falloff
+
+                delta_h += s.hue * weight;
+                delta_s += s.saturation * weight;
+                delta_l += s.luminance * weight;
+            }
+        }
+
+        // Apply adjustments
+        // Hue: wrap around
+        hsl[0] = (hsl[0] + delta_h * (30.0 / 360.0)).rem_euclid(1.0);
+
+        // Saturation/Luminosity: offset + clamp
+        hsl[1] = clamp(hsl[1] + delta_s, 0.0, 1.0);
+        hsl[2] = clamp(hsl[2] + delta_l, 0.0, 1.0);
+
+        let rgb_out = hsl_to_rgb(hsl);
+        pixel[0] = clamp_u8(rgb_out[0] * 255.0);
+        pixel[1] = clamp_u8(rgb_out[1] * 255.0);
+        pixel[2] = clamp_u8(rgb_out[2] * 255.0);
+        pixel[3] = a;
+    }
 }
 
 pub(crate) fn apply_curves_in_place(img: &mut RgbaImage, settings: &CurvesSettings) {

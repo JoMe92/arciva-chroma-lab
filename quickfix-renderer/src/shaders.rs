@@ -54,6 +54,8 @@ struct Settings {
     denoise_luminance: f32,
     denoise_color: f32, 
     curves_intensity: f32,
+    padding: f32,
+    hsl: array<vec4<f32>, 8>,
 };
 
 @group(0) @binding(0) var<uniform> settings: Settings;
@@ -148,6 +150,49 @@ fn yuv_to_rgb(yuv: vec3<f32>) -> vec3<f32> {
     let g = y - 0.39465 * u - 0.58060 * v;
     let b = y + 2.03211 * u;
     return vec3<f32>(r, g, b);
+}
+
+fn rgb_to_hsl(rgb: vec3<f32>) -> vec3<f32> {
+    let max_val = max(rgb.r, max(rgb.g, rgb.b));
+    let min_val = min(rgb.r, min(rgb.g, rgb.b));
+    let delta = max_val - min_val;
+
+    var h: f32 = 0.0;
+    if (delta > 0.0) {
+        if (max_val == rgb.r) {
+            h = (rgb.g - rgb.b) / delta;
+            if (h < 0.0) { h += 6.0; }
+        } else if (max_val == rgb.g) {
+            h = (rgb.b - rgb.r) / delta + 2.0;
+        } else {
+            h = (rgb.r - rgb.g) / delta + 4.0;
+        }
+        h /= 6.0;
+    }
+
+    let l = (max_val + min_val) / 2.0;
+    var s: f32 = 0.0;
+    if (delta > 0.0) {
+        s = delta / (1.0 - abs(2.0 * l - 1.0));
+    }
+    return vec3<f32>(h, s, l);
+}
+
+fn hsl_to_rgb(hsl: vec3<f32>) -> vec3<f32> {
+    let h = hsl.x;
+    let s = hsl.y;
+    let l = hsl.z;
+    let c = (1.0 - abs(2.0 * l - 1.0)) * s;
+    let x = c * (1.0 - abs(f32(h * 6.0) % 2.0 - 1.0));
+    let m = l - c / 2.0;
+    var rgb: vec3<f32>;
+    if (h < 1.0/6.0) { rgb = vec3<f32>(c, x, 0.0); }
+    else if (h < 2.0/6.0) { rgb = vec3<f32>(x, c, 0.0); }
+    else if (h < 3.0/6.0) { rgb = vec3<f32>(0.0, c, x); }
+    else if (h < 4.0/6.0) { rgb = vec3<f32>(0.0, x, c); }
+    else if (h < 5.0/6.0) { rgb = vec3<f32>(x, 0.0, c); }
+    else { rgb = vec3<f32>(c, 0.0, x); }
+    return rgb + vec3<f32>(m);
 }
 
 fn sample_denoised(uv: vec2<f32>) -> vec4<f32> {
@@ -409,6 +454,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let curved_color = vec3<f32>(curve_r, curve_g, curve_b);
     color = vec4<f32>(mix(color.rgb, curved_color, settings.curves_intensity), color.a);
 
+    // 5.2 HSL Tuning
+    var hsl = rgb_to_hsl(color.rgb);
+    let centers = array<f32, 8>(0.0, 30.0/360.0, 60.0/360.0, 120.0/360.0, 180.0/360.0, 240.0/360.0, 270.0/360.0, 300.0/360.0);
+    
+    var dH: f32 = 0.0;
+    var dS: f32 = 0.0;
+    var dL: f32 = 0.0;
+    
+    for (var i = 0; i < 8; i++) {
+        var dist = abs(hsl.x - centers[i]);
+        if (dist > 0.5) { dist = 1.0 - dist; }
+        
+        let width = 60.0 / 360.0;
+        if (dist < width) {
+            let t = dist / width;
+            let weight = 1.0 - t * t * (3.0 - 2.0 * t);
+            
+            dH += settings.hsl[i].x * weight;
+            dS += settings.hsl[i].y * weight;
+            dL += settings.hsl[i].z * weight;
+        }
+    }
+    
+    hsl.x = (hsl.x + dH * (30.0 / 360.0)) % 1.0;
+    if (hsl.x < 0.0) { hsl.x += 1.0; }
+    hsl.y = clamp(hsl.y + dS, 0.0, 1.0);
+    hsl.z = clamp(hsl.z + dL, 0.0, 1.0);
+    color = vec4<f32>(hsl_to_rgb(hsl), color.a);
+
     // 5.5 LUT
     if (settings.lut_intensity > 0.0) {
         let lut_color = textureSample(t_lut, s_lut, color.rgb);
@@ -509,6 +583,7 @@ uniform float u_denoise_luminance;
 uniform float u_denoise_color;
 uniform sampler2D u_curves;
 uniform float u_curves_intensity;
+uniform vec4 u_hsl[8]; // xyz = HSL adjustment, w = center hue
 
 // Helper: Cubic Hermite
 float cubic_hermite(float a, float b, float c, float d, float t) {
@@ -566,6 +641,49 @@ vec3 yuv_to_rgb(vec3 yuv) {
     float g = y - 0.39465 * u - 0.58060 * v;
     float b = y + 2.03211 * u;
     return vec3(r, g, b);
+}
+
+vec3 rgb_to_hsl(vec3 rgb) {
+    float max_val = max(rgb.r, max(rgb.g, rgb.b));
+    float min_val = min(rgb.r, min(rgb.g, rgb.b));
+    float delta = max_val - min_val;
+
+    float h = 0.0;
+    if (delta > 0.0) {
+        if (max_val == rgb.r) {
+            h = mod((rgb.g - rgb.b) / delta, 6.0);
+        } else if (max_val == rgb.g) {
+            h = (rgb.b - rgb.r) / delta + 2.0;
+        } else {
+            h = (rgb.r - rgb.g) / delta + 4.0;
+        }
+        h /= 6.0;
+        if (h < 0.0) h += 1.0;
+    }
+
+    float l = (max_val + min_val) / 2.0;
+    float s = 0.0;
+    if (delta > 0.0) {
+        s = delta / (1.0 - abs(2.0 * l - 1.0));
+    }
+    return vec3(h, s, l);
+}
+
+vec3 hsl_to_rgb(vec3 hsl) {
+    float h = hsl.x;
+    float s = hsl.y;
+    float l = hsl.z;
+    float c = (1.0 - abs(2.0 * l - 1.0)) * s;
+    float x = c * (1.0 - abs(mod(h * 6.0, 2.0) - 1.0));
+    float m = l - c / 2.0;
+    vec3 rgb;
+    if (h < 1.0/6.0) rgb = vec3(c, x, 0.0);
+    else if (h < 2.0/6.0) rgb = vec3(x, c, 0.0);
+    else if (h < 3.0/6.0) rgb = vec3(0.0, c, x);
+    else if (h < 4.0/6.0) rgb = vec3(0.0, x, c);
+    else if (h < 5.0/6.0) rgb = vec3(x, 0.0, c);
+    else rgb = vec3(c, 0.0, x);
+    return rgb + m;
 }
 
 vec4 sample_denoised(vec2 uv) {
@@ -724,6 +842,28 @@ void main() {
     curved_col.g = texture(u_curves, vec2(color.g, 0.5)).g;
     curved_col.b = texture(u_curves, vec2(color.b, 0.5)).b;
     color.rgb = mix(color.rgb, curved_col, u_curves_intensity);
+
+    // 5.2 HSL Tuning
+    vec3 hsl = rgb_to_hsl(color.rgb);
+    vec3 dHSL = vec3(0.0);
+    
+    for (int i = 0; i < 8; i++) {
+        float center = u_hsl[i].w;
+        float dist = abs(hsl.x - center);
+        if (dist > 0.5) dist = 1.0 - dist;
+        
+        float width = 60.0 / 360.0;
+        if (dist < width) {
+            float t = dist / width;
+            float weight = 1.0 - t * t * (3.0 - 2.0 * t);
+            dHSL += u_hsl[i].xyz * weight;
+        }
+    }
+    
+    hsl.x = mod(hsl.x + dHSL.x * (30.0 / 360.0), 1.0);
+    hsl.y = clamp(hsl.y + dHSL.y, 0.0, 1.0);
+    hsl.z = clamp(hsl.z + dHSL.z, 0.0, 1.0);
+    color.rgb = hsl_to_rgb(hsl);
 
     // 5.5 LUT 
     if (u_lut_intensity > 0.0) {

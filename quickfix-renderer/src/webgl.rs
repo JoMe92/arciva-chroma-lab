@@ -700,6 +700,57 @@ impl WebGlRenderer {
             loc("u_curves_intensity").as_ref(),
             settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
         );
+
+        // HSL
+        if let Some(hsl) = &settings.hsl {
+            let centers = [
+                0.0 / 360.0,
+                30.0 / 360.0,
+                60.0 / 360.0,
+                120.0 / 360.0,
+                180.0 / 360.0,
+                240.0 / 360.0,
+                270.0 / 360.0,
+                300.0 / 360.0,
+            ];
+            let ranges = [
+                &hsl.red,
+                &hsl.orange,
+                &hsl.yellow,
+                &hsl.green,
+                &hsl.aqua,
+                &hsl.blue,
+                &hsl.purple,
+                &hsl.magenta,
+            ];
+
+            let mut hsl_data = [0.0f32; 32];
+            for i in 0..8 {
+                hsl_data[i * 4] = ranges[i].hue;
+                hsl_data[i * 4 + 1] = ranges[i].saturation;
+                hsl_data[i * 4 + 2] = ranges[i].luminance;
+                hsl_data[i * 4 + 3] = centers[i];
+            }
+            gl.uniform_4_f32_slice(loc("u_hsl").as_ref(), &hsl_data);
+        } else {
+            // Identity HSL
+            let mut hsl_data = [0.0f32; 32];
+            let centers = [
+                0.0 / 360.0,
+                30.0 / 360.0,
+                60.0 / 360.0,
+                120.0 / 360.0,
+                180.0 / 360.0,
+                240.0 / 360.0,
+                270.0 / 360.0,
+                300.0 / 360.0,
+            ];
+            for i in 0..8 {
+                hsl_data[i * 4 + 3] = centers[i];
+            }
+            gl.uniform_4_f32_slice(loc("u_hsl").as_ref(), &hsl_data);
+        }
+
         gl.uniform_2_f32(loc("u_src_size").as_ref(), width as f32, height as f32);
 
         gl.viewport(0, 0, width as i32, height as i32);

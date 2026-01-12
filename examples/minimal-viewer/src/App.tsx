@@ -134,9 +134,36 @@ function App() {
   const [flipVertical, setFlipVertical] = useState(false);
   const [flipHorizontal, setFlipHorizontal] = useState(false);
 
-  // Curves State
   const [curves, setCurves] = useState<CurvesSettings>({
     intensity: 1.0,
+  });
+
+  interface HslRange {
+    hue: number;
+    saturation: number;
+    luminance: number;
+  }
+
+  interface HslSettings {
+    red: HslRange;
+    orange: HslRange;
+    yellow: HslRange;
+    green: HslRange;
+    aqua: HslRange;
+    blue: HslRange;
+    purple: HslRange;
+    magenta: HslRange;
+  }
+
+  const [hsl, setHsl] = useState<HslSettings>({
+    red: { hue: 0, saturation: 0, luminance: 0 },
+    orange: { hue: 0, saturation: 0, luminance: 0 },
+    yellow: { hue: 0, saturation: 0, luminance: 0 },
+    green: { hue: 0, saturation: 0, luminance: 0 },
+    aqua: { hue: 0, saturation: 0, luminance: 0 },
+    blue: { hue: 0, saturation: 0, luminance: 0 },
+    purple: { hue: 0, saturation: 0, luminance: 0 },
+    magenta: { hue: 0, saturation: 0, luminance: 0 },
   });
 
   const setCurvesIntensity = (intensity: number) => {
@@ -309,7 +336,8 @@ function App() {
           flipVertical: flipVertical,
           flipHorizontal: flipHorizontal
         },
-        curves: curves
+        curves: curves,
+        hsl: hsl
       };
 
       try {
@@ -410,7 +438,7 @@ function App() {
 
     render();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity, denoiseLuminance, denoiseColor, curves]);
+  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity, denoiseLuminance, denoiseColor, curves, hsl]);
 
   // Handle Canvas Click for WB Picking
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -618,6 +646,58 @@ function App() {
                 </div>
                 <input data-testid="tint-slider" type="range" min="-1" max="1" step="0.05" value={tint} onChange={e => setTint(parseFloat(e.target.value))} style={{ width: '100%' }} />
               </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>HSL Tuning</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {(['red', 'orange', 'yellow', 'green', 'aqua', 'blue', 'purple', 'magenta'] as const).map((col) => (
+                <div key={col} style={{ background: '#1a1a1a', padding: '0.8rem', borderRadius: '4px' }}>
+                  <div style={{ fontSize: '0.9rem', marginBottom: '0.6rem', color: '#fff', fontWeight: 'bold', textTransform: 'capitalize', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: col }} />
+                    {col}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', opacity: 0.7 }}>
+                        <label>Hue</label>
+                        <span>{hsl[col].hue.toFixed(2)}</span>
+                      </div>
+                      <input
+                        type="range" min="-1" max="1" step="0.1"
+                        value={hsl[col].hue}
+                        onChange={e => setHsl({ ...hsl, [col]: { ...hsl[col], hue: parseFloat(e.target.value) } })}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', opacity: 0.7 }}>
+                        <label>Sat</label>
+                        <span>{hsl[col].saturation.toFixed(2)}</span>
+                      </div>
+                      <input
+                        type="range" min="-1" max="1" step="0.1"
+                        value={hsl[col].saturation}
+                        onChange={e => setHsl({ ...hsl, [col]: { ...hsl[col], saturation: parseFloat(e.target.value) } })}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', opacity: 0.7 }}>
+                        <label>Lum</label>
+                        <span>{hsl[col].luminance.toFixed(2)}</span>
+                      </div>
+                      <input
+                        type="range" min="-1" max="1" step="0.1"
+                        value={hsl[col].luminance}
+                        onChange={e => setHsl({ ...hsl, [col]: { ...hsl[col], luminance: parseFloat(e.target.value) } })}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </section>
 
