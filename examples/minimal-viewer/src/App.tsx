@@ -114,7 +114,17 @@ function App() {
   const [vAmount, setVAmount] = useState(0);
   const [vMidpoint, setVMidpoint] = useState(0.5);
   const [vRoundness, setVRoundness] = useState(0);
+
   const [vFeather, setVFeather] = useState(0.5);
+
+  // Sharpen / Clarity / Dehaze
+  const [sharpenAmount, setSharpenAmount] = useState(0);
+  const [sharpenRadius, setSharpenRadius] = useState(1.0);
+  const [sharpenThreshold, setSharpenThreshold] = useState(0);
+
+  const [clarityAmount, setClarityAmount] = useState(0);
+  const [dehazeAmount, setDehazeAmount] = useState(0);
+
 
   const handleLutUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -364,6 +374,17 @@ function App() {
           midpoint: vMidpoint,
           roundness: vRoundness,
           feather: vFeather
+        },
+        sharpen: {
+          amount: sharpenAmount,
+          radius: sharpenRadius,
+          threshold: sharpenThreshold
+        },
+        clarity: {
+          amount: clarityAmount
+        },
+        dehaze: {
+          amount: dehazeAmount
         }
       };
 
@@ -465,7 +486,7 @@ function App() {
 
     render();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity, denoiseLuminance, denoiseColor, curves, hsl, stShadowHue, stShadowSat, stHighlightHue, stHighlightSat, stBalance, vAmount, vMidpoint, vRoundness, vFeather]);
+  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity, denoiseLuminance, denoiseColor, curves, hsl, stShadowHue, stShadowSat, stHighlightHue, stHighlightSat, stBalance, vAmount, vMidpoint, vRoundness, vFeather, sharpenAmount, sharpenRadius, sharpenThreshold, clarityAmount, dehazeAmount]);
 
   // Handle Canvas Click for WB Picking
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -780,6 +801,56 @@ function App() {
                   </div>
                 </div>
               ))}
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Details</h3>
+
+            <div style={{ paddingBottom: '1rem', borderBottom: '1px solid #222', marginBottom: '1rem' }}>
+              <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '0.5rem', color: '#ccc' }}>Sharpen</label>
+
+              <div style={{ marginBottom: '0.8rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Amount</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{sharpenAmount}</span>
+                </div>
+                <input type="range" min="0" max="5.0" step="0.1" value={sharpenAmount} onChange={e => setSharpenAmount(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div style={{ marginBottom: '0.8rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Radius</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{sharpenRadius}</span>
+                </div>
+                <input type="range" min="0.1" max="10.0" step="0.1" value={sharpenRadius} onChange={e => setSharpenRadius(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Threshold</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{sharpenThreshold}</span>
+                </div>
+                <input type="range" min="0" max="50" step="1" value={sharpenThreshold} onChange={e => setSharpenThreshold(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Clarity</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{clarityAmount}</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.05" value={clarityAmount} onChange={e => setClarityAmount(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Dehaze</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{dehazeAmount}</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.05" value={dehazeAmount} onChange={e => setDehazeAmount(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
             </div>
           </section>
 

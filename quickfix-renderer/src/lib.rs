@@ -188,6 +188,9 @@ pub struct QuickFixAdjustments {
 
     pub lut: Option<Lut3DSettings>,
     pub vignette: Option<VignetteSettings>,
+    pub sharpen: Option<SharpenSettings>,
+    pub clarity: Option<ClaritySettings>,
+    pub dehaze: Option<DehazeSettings>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -197,6 +200,26 @@ pub struct VignetteSettings {
     pub midpoint: f32, // 0.0 to 1.0 (size of clear area)
     pub roundness: f32, // -1.0 to 1.0 (shape, square vs circle)
     pub feather: f32, // 0.0 to 1.0 (smoothness)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SharpenSettings {
+    pub amount: f32,    // 0.0 to 1.0 (or higher)
+    pub radius: f32,    // 0.0 to ... px
+    pub threshold: f32, // 0.0 to 255.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaritySettings {
+    pub amount: f32, // -1.0 to 1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DehazeSettings {
+    pub amount: f32, // 0.0 to 1.0
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -304,6 +327,20 @@ export interface VignetteSettings {
     feather: number;
 }
 
+export interface SharpenSettings {
+    amount: number;
+    radius: number;
+    threshold: number;
+}
+
+export interface ClaritySettings {
+    amount: number;
+}
+
+export interface DehazeSettings {
+    amount: number;
+}
+
 export interface ChannelCurve {
     points: CurvePoint[];
 }
@@ -325,7 +362,11 @@ export interface QuickFixAdjustments {
     denoise?: DenoiseSettings;
     lut?: Lut3DSettings;
     vignette?: VignetteSettings;
+    sharpen?: SharpenSettings;
+    clarity?: ClaritySettings;
+    dehaze?: DehazeSettings;
 }
+
 "#;
 
 impl QuickFixAdjustments {
