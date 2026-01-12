@@ -59,9 +59,9 @@ struct Settings {
     st_highlight_hue: f32,
     st_highlight_sat: f32,
     st_balance: f32,
-    padding: f32,
-    padding2: f32,
     padding3: f32,
+    distortion_k1: f32,
+    distortion_k2: f32,
     hsl: array<vec4<f32>, 8>,
 };
 
@@ -200,6 +200,18 @@ fn hsl_to_rgb(hsl: vec3<f32>) -> vec3<f32> {
     else if (h < 5.0/6.0) { rgb = vec3<f32>(x, 0.0, c); }
     else { rgb = vec3<f32>(c, 0.0, x); }
     return rgb + vec3<f32>(m);
+}
+
+// Lens Distortion Helper
+fn distort_uv(uv: vec2<f32>) -> vec2<f32> {
+    if (settings.distortion_k1 == 0.0 && settings.distortion_k2 == 0.0) {
+        return uv;
+    }
+    let center = vec2<f32>(0.5, 0.5);
+    let rel = uv - center;
+    let r2 = dot(rel, rel);
+    let scaling = 1.0 + settings.distortion_k1 * r2 + settings.distortion_k2 * r2 * r2;
+    return center + rel * scaling;
 }
 
 fn sample_denoised(uv: vec2<f32>) -> vec4<f32> {
@@ -399,12 +411,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
     
-    // Check bounds
+    // Sample Texture
+    // Distort UV
+    uv = distort_uv(uv);
+
+    // Check bounds after distortion (since we might pull from outside)
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
-    
-    // Sample Texture
+
     // Use bicubic if enabled/needed, or bilinear for speed.
     // For now, let's use the bicubic function we wrote.
     var color = sample_denoised(uv);
@@ -642,6 +657,8 @@ uniform float u_denoise_luminance;
 uniform float u_denoise_color;
 uniform sampler2D u_curves;
 uniform float u_curves_intensity;
+uniform float u_distortion_k1;
+uniform float u_distortion_k2;
 uniform vec4 u_hsl[8]; // xyz = HSL adjustment, w = center hue
 uniform float u_st_shadow_hue;
 uniform float u_st_shadow_sat;
@@ -748,6 +765,17 @@ vec3 hsl_to_rgb(vec3 hsl) {
     else if (h < 5.0/6.0) rgb = vec3(x, 0.0, c);
     else rgb = vec3(c, 0.0, x);
     return rgb + m;
+}
+
+vec2 distort_uv(vec2 uv) {
+    if (u_distortion_k1 == 0.0 && u_distortion_k2 == 0.0) {
+        return uv;
+    }
+    vec2 center = vec2(0.5);
+    vec2 rel = uv - center;
+    float r2 = dot(rel, rel);
+    float scaling = 1.0 + u_distortion_k1 * r2 + u_distortion_k2 * r2 * r2;
+    return center + rel * scaling;
 }
 
 vec4 sample_denoised(vec2 uv) {
@@ -867,11 +895,18 @@ void main() {
         }
     }
     
+        return;
+    }
+    
+    // Distort UV
+    uv = distort_uv(uv);
+
+    // Check bounds after distortion
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         out_color = vec4(0.0);
         return;
     }
-    
+
     vec4 color = sample_denoised(uv);
     
     // 3. Exposure

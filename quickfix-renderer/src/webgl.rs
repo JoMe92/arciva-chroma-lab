@@ -697,8 +697,16 @@ impl WebGlRenderer {
             settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
         );
         gl.uniform_1_f32(
-            loc("u_curves_intensity").as_ref(),
             settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
+        );
+
+        gl.uniform_1_f32(
+            loc("u_distortion_k1").as_ref(),
+            settings.distortion.as_ref().map(|d| d.k1).unwrap_or(0.0),
+        );
+        gl.uniform_1_f32(
+            loc("u_distortion_k2").as_ref(),
+            settings.distortion.as_ref().map(|d| d.k2).unwrap_or(0.0),
         );
 
         // HSL

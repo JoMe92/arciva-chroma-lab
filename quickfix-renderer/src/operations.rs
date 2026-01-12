@@ -1,7 +1,7 @@
 use crate::{
     ClaritySettings, ColorSettings, CropSettings, CurvesSettings, DehazeSettings, DenoiseSettings,
     ExposureSettings, GeometrySettings, GrainSettings, HslSettings, QuickFixAdjustments,
-    SharpenSettings, SplitToningSettings, VignetteSettings,
+    SharpenSettings, SplitToningSettings, VignetteSettings, LensDistortionSettings,
 };
 use image::{ImageBuffer, Rgba, RgbaImage};
 use rand::SeedableRng;
@@ -19,6 +19,10 @@ fn clamp_u8(v: f32) -> u8 {
 }
 
 use crate::api_types::Lut3DSettings;
+// New imports for potential test module or general use
+use super::*;
+use crate::{CropRect, ChannelCurve, CurvePoint};
+
 
 pub fn compute_histogram(data: &[u8]) -> Vec<u32> {
     let mut histogram = vec![0u32; 256 * 3]; // R, G, B concatenated
@@ -48,6 +52,11 @@ pub fn process_frame_internal(
     // Convert raw bytes to ImageBuffer
     let mut img: RgbaImage =
         ImageBuffer::from_raw(width, height, data.to_vec()).ok_or("Invalid buffer size")?;
+
+    // 0. Lens Distortion
+    if let Some(distortion) = &adjustments.distortion {
+        img = apply_lens_distortion(&img, distortion);
+    }
 
     // 1. Geometry
     if let Some(geo) = &adjustments.geometry {
@@ -376,6 +385,54 @@ fn apply_crop_rotate(img: &RgbaImage, settings: &CropSettings) -> RgbaImage {
     }
 
     result
+}
+
+
+fn apply_lens_distortion(img: &RgbaImage, settings: &LensDistortionSettings) -> RgbaImage {
+    if settings.k1.abs() < 1e-5 && settings.k2.abs() < 1e-5 {
+        return img.clone();
+    }
+
+    let width = img.width();
+    let height = img.height();
+    let mut new_img = RgbaImage::new(width, height);
+
+    let w_f32 = width as f32;
+    let h_f32 = height as f32;
+    let center_x = 0.5;
+    let center_y = 0.5;
+
+    // We iterate over OUTPUT pixels (straight image) and map to INPUT pixels (distorted source)
+    for y in 0..height {
+        let v = y as f32 / h_f32;
+        for x in 0..width {
+            let u = x as f32 / w_f32;
+
+            // Distort UV
+            // r^2 = x^2 + y^2 (relative to center)
+            let rel_x = u - center_x;
+            let rel_y = v - center_y;
+            let r2 = rel_x * rel_x + rel_y * rel_y;
+            let scaling = 1.0 + settings.k1 * r2 + settings.k2 * r2 * r2;
+
+            let src_u = center_x + rel_x * scaling;
+            let src_v = center_y + rel_y * scaling;
+
+            // Check bounds
+            if src_u < 0.0 || src_u > 1.0 || src_v < 0.0 || src_v > 1.0 {
+                // Black
+                new_img.put_pixel(x, y, Rgba([0, 0, 0, 255])); // Alpha 255 for opaque black? Or 0? Let's use 0 for transparent border.
+                continue;
+            }
+
+            let src_x = src_u * w_f32;
+            let src_y = src_v * h_f32;
+            
+            new_img.put_pixel(x, y, sample_bicubic(img, src_x, src_y));
+        }
+    }
+
+    new_img
 }
 
 fn apply_exposure_in_place(img: &mut RgbaImage, settings: &ExposureSettings) {
@@ -1422,9 +1479,11 @@ fn fast_box_blur(img: &RgbaImage, radius: u32) -> RgbaImage {
 mod tests {
     use super::*;
     use crate::{
-        ClaritySettings, DehazeSettings, GeometrySettings, GrainSettings, HslSettings,
+        ClaritySettings, ColorSettings, CropSettings, DehazeSettings, ExposureSettings,
+        GeometrySettings, GrainSettings, HslSettings, LensDistortionSettings,
         QuickFixAdjustments, SharpenSettings, SplitToningSettings, VignetteSettings,
     };
+    use crate::{ChannelCurve, CropRect, CurvePoint};
 
     fn create_test_image(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {
         let mut img = RgbaImage::new(width, height);
@@ -1839,6 +1898,47 @@ mod tests {
         assert!(p_right[0] > 200);
     }
 
+    #[test]
+    fn test_apply_lens_distortion() {
+        let width = 100;
+        let height = 100;
+        let mut img = create_test_image(width, height, [255, 255, 255, 255]);
+        
+        // Draw a straight line at x=50 (width 3: 49, 50, 51)
+        for y in 0..height {
+            img.put_pixel(49, y, Rgba([0, 0, 0, 255]));
+            img.put_pixel(50, y, Rgba([0, 0, 0, 255]));
+            img.put_pixel(51, y, Rgba([0, 0, 0, 255]));
+        }
+
+        let settings = LensDistortionSettings {
+            k1: 0.5, 
+            k2: 0.0,
+        };
+
+        let res = apply_lens_distortion(&img, &settings);
+        
+        // Center should stay at 50 (cx=0.5 -> x=50).
+        let center_px = res.get_pixel(50, 50);
+        assert_eq!(center_px[0], 0); // Should be black
+
+        // Point not at center (x=25) should look different (shifted).
+        // Vertical line at x=25.
+        let mut img_vert = create_test_image(width, height, [255, 255, 255, 255]);
+        for y in 0..height {
+            img_vert.put_pixel(25, y, Rgba([0, 0, 0, 255]));
+        }
+        
+        let res_vert = apply_lens_distortion(&img_vert, &settings);
+        
+        // At center y=50, the line shifts inwards?
+        // u=0.25 maps to src_u=0.242.
+        // So Res(25) looks at Src(24). Src(24) is white.
+        // Src(25) is black.
+        // So Res(25) is white.
+        // The black line effectively moved to x=26 (where src_u maps to 0.25).
+        assert!(res_vert.get_pixel(25, 50)[0] > 100); // Moved away
+    }
     #[test]
     fn test_apply_clarity() {
         // Clarity boosts local contrast.

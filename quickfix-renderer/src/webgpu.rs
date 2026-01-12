@@ -36,9 +36,11 @@ struct SettingsUniform {
     st_highlight_hue: f32,
     st_highlight_sat: f32,
     st_balance: f32,
+    /// Padding to match WGSL alignment (144 bytes used + 1 padding + 2 distortion + 1 align = 160)
     _padding: f32,
-    _padding2: f32,
-    _padding3: f32,
+    distortion_k1: f32,
+    distortion_k2: f32,
+    _padding_align: f32,
     hsl: [[f32; 4]; 8],
 }
 
@@ -573,8 +575,10 @@ impl Renderer for WebGpuRenderer {
                 .as_ref()
                 .map(|s| s.balance)
                 .unwrap_or(0.0),
-            _padding2: 0.0,
-            _padding3: 0.0,
+            _padding: 0.0,
+            distortion_k1: settings.distortion.as_ref().map(|d| d.k1).unwrap_or(0.0),
+            distortion_k2: settings.distortion.as_ref().map(|d| d.k2).unwrap_or(0.0),
+            _padding_align: 0.0,
             hsl: {
                 let mut hsl_data = [[0.0f32; 4]; 8];
                 let centers = [

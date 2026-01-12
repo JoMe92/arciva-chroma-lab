@@ -191,6 +191,7 @@ pub struct QuickFixAdjustments {
     pub sharpen: Option<SharpenSettings>,
     pub clarity: Option<ClaritySettings>,
     pub dehaze: Option<DehazeSettings>,
+    pub distortion: Option<LensDistortionSettings>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -220,6 +221,14 @@ pub struct ClaritySettings {
 #[serde(rename_all = "camelCase")]
 pub struct DehazeSettings {
     pub amount: f32, // 0.0 to 1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LensDistortionSettings {
+    pub k1: f32, // Main radial distortion
+    pub k2: f32, // Secondary radial distortion
+    // We could add centers or scale, but let's stick to k1/k2 for now
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -341,6 +350,11 @@ export interface DehazeSettings {
     amount: number;
 }
 
+export interface LensDistortionSettings {
+    k1: number;
+    k2: number;
+}
+
 export interface ChannelCurve {
     points: CurvePoint[];
 }
@@ -365,6 +379,7 @@ export interface QuickFixAdjustments {
     sharpen?: SharpenSettings;
     clarity?: ClaritySettings;
     dehaze?: DehazeSettings;
+    distortion?: LensDistortionSettings;
 }
 
 "#;
