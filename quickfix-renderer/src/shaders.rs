@@ -53,6 +53,7 @@ struct Settings {
     // Denoise
     denoise_luminance: f32,
     denoise_color: f32, 
+    curves_intensity: f32,
 };
 
 @group(0) @binding(0) var<uniform> settings: Settings;
@@ -62,6 +63,8 @@ struct Settings {
 @group(0) @binding(4) var s_grain: sampler;
 @group(0) @binding(5) var t_lut: texture_3d<f32>;
 @group(0) @binding(6) var s_lut: sampler;
+@group(0) @binding(7) var t_curves: texture_2d<f32>;
+@group(0) @binding(8) var s_curves: sampler;
 
 // Helper: Bicubic sampling
 fn cubic_hermite(a: f32, b: f32, c: f32, d: f32, t: f32) -> f32 {
@@ -399,15 +402,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         );
     }
     
-    // 5. LUT
+    // 5. Curves
+    let curve_r = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.r, 0.5), 0.0).r;
+    let curve_g = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.g, 0.5), 0.0).g;
+    let curve_b = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.b, 0.5), 0.0).b;
+    let curved_color = vec3<f32>(curve_r, curve_g, curve_b);
+    color = vec4<f32>(mix(color.rgb, curved_color, settings.curves_intensity), color.a);
+
+    // 5.5 LUT
     if (settings.lut_intensity > 0.0) {
-        // Map color to 0..1 (it is already)
-        // Texture 3D sampling
-        // Color is the coordinate.
-        // We need a sampler and texture.
-        // Assuming we add binding 5 and 6 for LUT.
         let lut_color = textureSample(t_lut, s_lut, color.rgb);
-        
         color = vec4<f32>(mix(color.rgb, lut_color.rgb, settings.lut_intensity), color.a); 
     }
 
@@ -503,6 +507,8 @@ uniform sampler3D u_lut;
 uniform float u_lut_intensity;
 uniform float u_denoise_luminance;
 uniform float u_denoise_color;
+uniform sampler2D u_curves;
+uniform float u_curves_intensity;
 
 // Helper: Cubic Hermite
 float cubic_hermite(float a, float b, float c, float d, float t) {
@@ -712,7 +718,14 @@ void main() {
         color.b *= temp_b * tint_rb;
     }
     
-    // 5. LUT 
+    // 5. Curves
+    vec3 curved_col;
+    curved_col.r = texture(u_curves, vec2(color.r, 0.5)).r;
+    curved_col.g = texture(u_curves, vec2(color.g, 0.5)).g;
+    curved_col.b = texture(u_curves, vec2(color.b, 0.5)).b;
+    color.rgb = mix(color.rgb, curved_col, u_curves_intensity);
+
+    // 5.5 LUT 
     if (u_lut_intensity > 0.0) {
         vec3 lut_col = texture(u_lut, color.rgb).rgb;
         color.rgb = mix(color.rgb, lut_col, u_lut_intensity);

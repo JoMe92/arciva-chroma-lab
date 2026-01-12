@@ -15,9 +15,11 @@ pub struct WebGlRenderer {
     texture: Option<glow::Texture>,
     grain_texture: Option<glow::Texture>,
     lut_texture: Option<glow::Texture>,
+    curves_texture: Option<glow::Texture>,
 
     lut_cache: Option<(Vec<f32>, u32)>,
     lut_dirty: bool,
+    curves_dirty: bool,
 
     canvas: Option<CanvasBackend>, // Keep reference if we created context from it
 }
@@ -82,8 +84,10 @@ impl WebGlRenderer {
             texture: None,
             grain_texture: None,
             lut_texture: None,
+            curves_texture: None,
             lut_cache: None,
             lut_dirty: false,
+            curves_dirty: false,
             canvas: None,
         }
     }
@@ -110,6 +114,7 @@ impl WebGlRenderer {
                     self.lut_texture = None;
                     // Keep cache and mark dirty to re-upload
                     self.lut_dirty = true;
+                    self.curves_dirty = true;
                     self.canvas = None;
                 }
             } else {
@@ -121,6 +126,7 @@ impl WebGlRenderer {
                 self.grain_texture = None;
                 self.lut_texture = None;
                 self.lut_dirty = true;
+                self.curves_dirty = true;
                 self.canvas = None;
             }
         }
@@ -347,12 +353,38 @@ impl WebGlRenderer {
             // Don't upload data here, will do in render if dirty
             self.lut_dirty = true;
 
+            // Curves Texture (256x1, 3 channels)
+            let curves_texture = gl.create_texture().map_err(RendererError::InitFailed)?;
+            gl.bind_texture(glow::TEXTURE_2D, Some(curves_texture));
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR as i32,
+            );
+            self.curves_dirty = true;
+
             self.context = Some(gl);
             self.program = Some(program);
             self.vao = Some(vao);
             self.texture = Some(texture);
             self.grain_texture = Some(grain_texture);
             self.lut_texture = Some(lut_texture);
+            self.curves_texture = Some(curves_texture);
         }
 
         Ok(())
@@ -429,12 +461,107 @@ impl WebGlRenderer {
             self.lut_dirty = false;
         }
 
+        // Curves LUT
+        gl.active_texture(glow::TEXTURE3);
+        gl.bind_texture(glow::TEXTURE_2D, self.curves_texture);
+        if let Some(curves) = &settings.curves {
+            // Generate combined curves LUT
+            let master = crate::operations::generate_curve_lut(
+                &curves
+                    .master
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let red = crate::operations::generate_curve_lut(
+                &curves
+                    .red
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let green = crate::operations::generate_curve_lut(
+                &curves
+                    .green
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let blue = crate::operations::generate_curve_lut(
+                &curves
+                    .blue
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+
+            let mut combined_data = Vec::with_capacity(256 * 3);
+            for &m in &master {
+                let rx = (m * 255.0).clamp(0.0, 255.0);
+                let ri = rx.floor() as usize;
+                let rf = rx - ri as f32;
+
+                let r = if ri >= 255 {
+                    red[255]
+                } else {
+                    red[ri] * (1.0 - rf) + red[ri + 1] * rf
+                };
+                let g = if ri >= 255 {
+                    green[255]
+                } else {
+                    green[ri] * (1.0 - rf) + green[ri + 1] * rf
+                };
+                let b = if ri >= 255 {
+                    blue[255]
+                } else {
+                    blue[ri] * (1.0 - rf) + blue[ri + 1] * rf
+                };
+
+                combined_data.push(r);
+                combined_data.push(g);
+                combined_data.push(b);
+            }
+
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGB32F as i32,
+                256,
+                1,
+                0,
+                glow::RGB,
+                glow::FLOAT,
+                Some(bytemuck::cast_slice(&combined_data)),
+            );
+        } else {
+            // Identity LUT
+            let mut identity = Vec::with_capacity(256 * 3);
+            for i in 0..256 {
+                let v = i as f32 / 255.0;
+                identity.push(v);
+                identity.push(v);
+                identity.push(v);
+            }
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGB32F as i32,
+                256,
+                1,
+                0,
+                glow::RGB,
+                glow::FLOAT,
+                Some(bytemuck::cast_slice(&identity)),
+            );
+        }
+
         // Uniforms
         let loc = |name| gl.get_uniform_location(program, name);
 
         gl.uniform_1_i32(loc("u_texture").as_ref(), 0);
         gl.uniform_1_i32(loc("u_grain").as_ref(), 1);
         gl.uniform_1_i32(loc("u_lut").as_ref(), 2);
+        gl.uniform_1_i32(loc("u_curves").as_ref(), 3);
 
         let vertical = settings
             .geometry
@@ -568,6 +695,10 @@ impl WebGlRenderer {
         gl.uniform_1_f32(
             loc("u_denoise_color").as_ref(),
             settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
+        );
+        gl.uniform_1_f32(
+            loc("u_curves_intensity").as_ref(),
+            settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
         );
         gl.uniform_2_f32(loc("u_src_size").as_ref(), width as f32, height as f32);
 

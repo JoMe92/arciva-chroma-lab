@@ -30,6 +30,7 @@ struct SettingsUniform {
     lut_intensity: f32,
     denoise_luminance: f32,
     denoise_color: f32,
+    curves_intensity: f32,
     _padding: f32,
     // Previous: 16 floats exactly?
     // geo (4), flip (4), crop_rot/asp/exp/cont (4), high/shad/temp/tint (4), grain/size/w/h (4).
@@ -80,6 +81,7 @@ pub struct WebGpuRenderer {
     lut_texture: Option<wgpu::Texture>,
     lut_sampler: Option<wgpu::Sampler>,
     default_lut_texture: Option<wgpu::Texture>,
+    curves_sampler: Option<wgpu::Sampler>,
 }
 
 impl Default for WebGpuRenderer {
@@ -102,6 +104,7 @@ impl WebGpuRenderer {
             lut_texture: None,
             lut_sampler: None,
             default_lut_texture: None,
+            curves_sampler: None,
         }
     }
 
@@ -197,6 +200,24 @@ impl WebGpuRenderer {
                 // LUT Sampler
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // Curves Texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Curves Sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -320,7 +341,6 @@ impl WebGpuRenderer {
         });
 
         self.adapter = Some(adapter);
-        self.device = Some(device);
         self.queue = Some(queue);
         self.pipeline = Some(pipeline);
         self.bind_group_layout = Some(bind_group_layout);
@@ -328,6 +348,18 @@ impl WebGpuRenderer {
         self.grain_sampler = Some(grain_sampler);
         self.default_lut_texture = Some(default_lut_texture);
         self.lut_sampler = Some(lut_sampler);
+
+        // Curves Sampler
+        let curves_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Curves Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        self.curves_sampler = Some(curves_sampler);
+        self.device = Some(device);
 
         Ok(())
     }
@@ -541,6 +573,7 @@ impl Renderer for WebGpuRenderer {
                 .map(|d| d.luminance)
                 .unwrap_or(0.0),
             denoise_color: settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
+            curves_intensity: settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
             _padding: 0.0,
         };
 
@@ -557,6 +590,98 @@ impl Renderer for WebGpuRenderer {
             .or(self.default_lut_texture.as_ref())
             .unwrap()
             .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Curves LUT Update
+        let combined_data = if let Some(curves) = &settings.curves {
+            let master = crate::operations::generate_curve_lut(
+                &curves
+                    .master
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let red = crate::operations::generate_curve_lut(
+                &curves
+                    .red
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let green = crate::operations::generate_curve_lut(
+                &curves
+                    .green
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let blue = crate::operations::generate_curve_lut(
+                &curves
+                    .blue
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+
+            let mut combined = Vec::with_capacity(256 * 4);
+            for &m in &master {
+                let rx = (m * 255.0).clamp(0.0, 255.0);
+                let ri = rx.floor() as usize;
+                let rf = rx - ri as f32;
+
+                let r = if ri >= 255 {
+                    red[255]
+                } else {
+                    red[ri] * (1.0 - rf) + red[ri + 1] * rf
+                };
+                let g = if ri >= 255 {
+                    green[255]
+                } else {
+                    green[ri] * (1.0 - rf) + green[ri + 1] * rf
+                };
+                let b = if ri >= 255 {
+                    blue[255]
+                } else {
+                    blue[ri] * (1.0 - rf) + blue[ri + 1] * rf
+                };
+
+                combined.push(r);
+                combined.push(g);
+                combined.push(b);
+                combined.push(1.0); // Alpha
+            }
+            combined
+        } else {
+            let mut identity = Vec::with_capacity(256 * 4);
+            for i in 0..256 {
+                let v = i as f32 / 255.0;
+                identity.push(v);
+                identity.push(v);
+                identity.push(v);
+                identity.push(1.0);
+            }
+            identity
+        };
+
+        let curves_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Curves Texture"),
+                size: wgpu::Extent3d {
+                    width: 256,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            bytemuck::cast_slice(&combined_data),
+        );
+        let curves_view = curves_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Bind Group"),
@@ -595,6 +720,14 @@ impl Renderer for WebGpuRenderer {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::Sampler(self.lut_sampler.as_ref().unwrap()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&curves_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::Sampler(self.curves_sampler.as_ref().unwrap()),
                 },
             ],
         });
@@ -893,6 +1026,7 @@ impl Renderer for WebGpuRenderer {
                 .map(|d| d.luminance)
                 .unwrap_or(0.0),
             denoise_color: settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
+            curves_intensity: settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
             _padding: 0.0,
         };
 
@@ -909,6 +1043,98 @@ impl Renderer for WebGpuRenderer {
             .or(self.default_lut_texture.as_ref())
             .unwrap()
             .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Curves LUT Update
+        let combined_data = if let Some(curves) = &settings.curves {
+            let master = crate::operations::generate_curve_lut(
+                &curves
+                    .master
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let red = crate::operations::generate_curve_lut(
+                &curves
+                    .red
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let green = crate::operations::generate_curve_lut(
+                &curves
+                    .green
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let blue = crate::operations::generate_curve_lut(
+                &curves
+                    .blue
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+
+            let mut combined = Vec::with_capacity(256 * 4);
+            for &m in &master {
+                let rx = (m * 255.0).clamp(0.0, 255.0);
+                let ri = rx.floor() as usize;
+                let rf = rx - ri as f32;
+
+                let r = if ri >= 255 {
+                    red[255]
+                } else {
+                    red[ri] * (1.0 - rf) + red[ri + 1] * rf
+                };
+                let g = if ri >= 255 {
+                    green[255]
+                } else {
+                    green[ri] * (1.0 - rf) + green[ri + 1] * rf
+                };
+                let b = if ri >= 255 {
+                    blue[255]
+                } else {
+                    blue[ri] * (1.0 - rf) + blue[ri + 1] * rf
+                };
+
+                combined.push(r);
+                combined.push(g);
+                combined.push(b);
+                combined.push(1.0); // Alpha
+            }
+            combined
+        } else {
+            let mut identity = Vec::with_capacity(256 * 4);
+            for i in 0..256 {
+                let v = i as f32 / 255.0;
+                identity.push(v);
+                identity.push(v);
+                identity.push(v);
+                identity.push(1.0);
+            }
+            identity
+        };
+
+        let curves_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Curves Texture"),
+                size: wgpu::Extent3d {
+                    width: 256,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            bytemuck::cast_slice(&combined_data),
+        );
+        let curves_view = curves_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Bind Group"),
@@ -947,6 +1173,14 @@ impl Renderer for WebGpuRenderer {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::Sampler(self.lut_sampler.as_ref().unwrap()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&curves_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::Sampler(self.curves_sampler.as_ref().unwrap()),
                 },
             ],
         });
