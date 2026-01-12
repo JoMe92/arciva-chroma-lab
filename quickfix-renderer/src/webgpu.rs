@@ -548,6 +548,33 @@ impl Renderer for WebGpuRenderer {
             denoise_color: settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
             curves_intensity: settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
             _padding: 0.0,
+            st_shadow_hue: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.shadow_hue / 360.0)
+                .unwrap_or(0.0),
+            st_shadow_sat: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.shadow_sat)
+                .unwrap_or(0.0),
+            st_highlight_hue: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.highlight_hue / 360.0)
+                .unwrap_or(0.0),
+            st_highlight_sat: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.highlight_sat)
+                .unwrap_or(0.0),
+            st_balance: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.balance)
+                .unwrap_or(0.0),
+            _padding2: 0.0,
+            _padding3: 0.0,
             hsl: {
                 let mut hsl_data = [[0.0f32; 4]; 8];
                 let centers = [
@@ -1037,6 +1064,33 @@ impl Renderer for WebGpuRenderer {
             denoise_color: settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
             curves_intensity: settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
             _padding: 0.0,
+            st_shadow_hue: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.shadow_hue / 360.0)
+                .unwrap_or(0.0),
+            st_shadow_sat: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.shadow_sat)
+                .unwrap_or(0.0),
+            st_highlight_hue: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.highlight_hue / 360.0)
+                .unwrap_or(0.0),
+            st_highlight_sat: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.highlight_sat)
+                .unwrap_or(0.0),
+            st_balance: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.balance)
+                .unwrap_or(0.0),
+            _padding2: 0.0,
+            _padding3: 0.0,
             hsl: {
                 let mut hsl_data = [[0.0f32; 4]; 8];
                 let centers = [

@@ -102,6 +102,13 @@ function App() {
   // Interaction State
   const [isPickingWB, setIsPickingWB] = useState(false);
 
+  // Split Toning
+  const [stShadowHue, setStShadowHue] = useState(210); // Default Teal-ish
+  const [stShadowSat, setStShadowSat] = useState(0);
+  const [stHighlightHue, setStHighlightHue] = useState(30); // Default Orange-ish
+  const [stHighlightSat, setStHighlightSat] = useState(0);
+  const [stBalance, setStBalance] = useState(0);
+
   const handleLutUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
@@ -337,7 +344,14 @@ function App() {
           flipHorizontal: flipHorizontal
         },
         curves: curves,
-        hsl: hsl
+        hsl: hsl,
+        splitToning: {
+          shadowHue: stShadowHue,
+          shadowSat: stShadowSat,
+          highlightHue: stHighlightHue,
+          highlightSat: stHighlightSat,
+          balance: stBalance
+        }
       };
 
       try {
@@ -438,7 +452,7 @@ function App() {
 
     render();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity, denoiseLuminance, denoiseColor, curves, hsl]);
+  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity, denoiseLuminance, denoiseColor, curves, hsl, stShadowHue, stShadowSat, stHighlightHue, stHighlightSat, stBalance]);
 
   // Handle Canvas Click for WB Picking
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -645,6 +659,61 @@ function App() {
                   <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{tint.toFixed(2)}</span>
                 </div>
                 <input data-testid="tint-slider" type="range" min="-1" max="1" step="0.05" value={tint} onChange={e => setTint(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Split Toning</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <div>
+                <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '0.5rem', color: '#ccc' }}>Highlights</label>
+                <div style={{ marginBottom: '0.5rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                    <label style={{ fontSize: '0.85rem' }}>Hue</label>
+                    <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{stHighlightHue}°</span>
+                  </div>
+                  <input type="range" min="0" max="360" step="1" value={stHighlightHue} onChange={e => setStHighlightHue(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                  <div style={{ height: '4px', background: `hsl(${stHighlightHue}, 100%, 50%)`, borderRadius: '2px', marginTop: '4px' }}></div>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                    <label style={{ fontSize: '0.85rem' }}>Saturation</label>
+                    <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{stHighlightSat}</span>
+                  </div>
+                  <input type="range" min="0" max="1" step="0.05" value={stHighlightSat} onChange={e => setStHighlightSat(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                </div>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '0.5rem', color: '#ccc' }}>Shadows</label>
+                <div style={{ marginBottom: '0.5rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                    <label style={{ fontSize: '0.85rem' }}>Hue</label>
+                    <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{stShadowHue}°</span>
+                  </div>
+                  <input type="range" min="0" max="360" step="1" value={stShadowHue} onChange={e => setStShadowHue(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                  <div style={{ height: '4px', background: `hsl(${stShadowHue}, 100%, 50%)`, borderRadius: '2px', marginTop: '4px' }}></div>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                    <label style={{ fontSize: '0.85rem' }}>Saturation</label>
+                    <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{stShadowSat}</span>
+                  </div>
+                  <input type="range" min="0" max="1" step="0.05" value={stShadowSat} onChange={e => setStShadowSat(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                </div>
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Balance</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{stBalance}</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.1" value={stBalance} onChange={e => setStBalance(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', opacity: 0.5, marginTop: '2px' }}>
+                  <span>Shadows</span>
+                  <span>Highlights</span>
+                </div>
               </div>
             </div>
           </section>

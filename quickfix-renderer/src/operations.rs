@@ -82,7 +82,7 @@ pub fn process_frame_internal(
     if let Some(hsl) = &adjustments.hsl {
         apply_hsl_in_place(&mut img, hsl);
     }
-    
+
     // 7.5 Split Toning
     if let Some(st) = &adjustments.split_toning {
         apply_split_toning_in_place(&mut img, st);
@@ -1043,13 +1043,12 @@ pub(crate) fn apply_split_toning_in_place(img: &mut RgbaImage, settings: &SplitT
             if blend < 0.5 {
                 base - (1.0 - 2.0 * blend) * base * (1.0 - base)
             } else {
-                base + (2.0 * blend - 1.0) * ((base.sqrt().max(base) - base) * base + base - base)
-                // Simplified soft light
-                base + (2.0 * blend - 1.0) * (if base <= 0.25 {
-                    ((16.0 * base - 12.0) * base + 4.0) * base
-                } else {
-                    base.sqrt()
-                } - base)
+                base + (2.0 * blend - 1.0)
+                    * (if base <= 0.25 {
+                        ((16.0 * base - 12.0) * base + 4.0) * base
+                    } else {
+                        base.sqrt()
+                    } - base)
             }
         }
 
@@ -1066,12 +1065,12 @@ pub(crate) fn apply_split_toning_in_place(img: &mut RgbaImage, settings: &SplitT
 
         // Apply Highlight Tint
         if highlight_s > 0.0 {
-            r_out =
-                soft_light(r_out, highlight_rgb[0]) * highlight_mask + r_out * (1.0 - highlight_mask);
-            g_out =
-                soft_light(g_out, highlight_rgb[1]) * highlight_mask + g_out * (1.0 - highlight_mask);
-            b_out =
-                soft_light(b_out, highlight_rgb[2]) * highlight_mask + b_out * (1.0 - highlight_mask);
+            r_out = soft_light(r_out, highlight_rgb[0]) * highlight_mask
+                + r_out * (1.0 - highlight_mask);
+            g_out = soft_light(g_out, highlight_rgb[1]) * highlight_mask
+                + g_out * (1.0 - highlight_mask);
+            b_out = soft_light(b_out, highlight_rgb[2]) * highlight_mask
+                + b_out * (1.0 - highlight_mask);
         }
 
         pixel[0] = clamp_u8(r_out * 255.0);
@@ -1423,7 +1422,7 @@ mod tests {
     fn test_apply_split_toning() {
         let mut img = create_test_image(1, 1, [128, 128, 128, 255]); // Mid gray
         let settings = SplitToningSettings {
-            shadow_hue: 200.0,    // Teal
+            shadow_hue: 200.0, // Teal
             shadow_sat: 0.5,
             highlight_hue: 30.0, // Orange
             highlight_sat: 0.5,
@@ -1431,8 +1430,8 @@ mod tests {
         };
         apply_split_toning_in_place(&mut img, &settings);
         let px = img.get_pixel(0, 0);
-        
-        // Mid gray should be affected by both (or neutral if masks are 0 at midpoint, 
+
+        // Mid gray should be affected by both (or neutral if masks are 0 at midpoint,
         // but our masks overlap mid).
         // Let's just verify it changed.
         assert!(px[0] != 128 || px[1] != 128 || px[2] != 128);
