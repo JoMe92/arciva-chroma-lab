@@ -54,7 +54,14 @@ struct Settings {
     denoise_luminance: f32,
     denoise_color: f32, 
     curves_intensity: f32,
+    st_shadow_hue: f32,
+    st_shadow_sat: f32,
+    st_highlight_hue: f32,
+    st_highlight_sat: f32,
+    st_balance: f32,
     padding: f32,
+    padding2: f32,
+    padding3: f32,
     hsl: array<vec4<f32>, 8>,
 };
 
@@ -483,6 +490,58 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     hsl.z = clamp(hsl.z + dL, 0.0, 1.0);
     color = vec4<f32>(hsl_to_rgb(hsl), color.a);
 
+    // 5.3 Split Toning
+    if (settings.st_shadow_sat > 0.0 || settings.st_highlight_sat > 0.0) {
+        let lum = dot(color.rgb, vec3<f32>(0.299, 0.587, 0.114));
+        let mid = 0.5 + settings.st_balance * 0.5;
+        let shadow_rgb = hsl_to_rgb(vec3<f32>(settings.st_shadow_hue / 360.0, settings.st_shadow_sat, 0.5));
+        let highlight_rgb = hsl_to_rgb(vec3<f32>(settings.st_highlight_hue / 360.0, settings.st_highlight_sat, 0.5));
+        
+        // Masks
+        let h_mask = clamp((lum - mid) / max(0.01, 1.0 - mid), 0.0, 1.0);
+        let s_mask = 1.0 - clamp(lum / max(0.01, mid), 0.0, 1.0);
+
+        // Soft Light
+        var final_rgb = color.rgb;
+        
+        // Shadow pass
+        if (settings.st_shadow_sat > 0.0) {
+            for (var i = 0; i < 3; i++) {
+                let base = final_rgb[i];
+                let blend = shadow_rgb[i];
+                var res: f32;
+                if (blend < 0.5) {
+                    res = base - (1.0 - 2.0 * blend) * base * (1.0 - base);
+                } else {
+                    var v: f32;
+                    if (base <= 0.25) { v = ((16.0 * base - 12.0) * base + 4.0) * base; }
+                    else { v = sqrt(base); }
+                    res = base + (2.0 * blend - 1.0) * (v - base);
+                }
+                final_rgb[i] = mix(base, res, s_mask);
+            }
+        }
+        
+        // Highlight pass
+        if (settings.st_highlight_sat > 0.0) {
+            for (var i = 0; i < 3; i++) {
+                let base = final_rgb[i];
+                let blend = highlight_rgb[i];
+                var res: f32;
+                if (blend < 0.5) {
+                    res = base - (1.0 - 2.0 * blend) * base * (1.0 - base);
+                } else {
+                    var v: f32;
+                    if (base <= 0.25) { v = ((16.0 * base - 12.0) * base + 4.0) * base; }
+                    else { v = sqrt(base); }
+                    res = base + (2.0 * blend - 1.0) * (v - base);
+                }
+                final_rgb[i] = mix(base, res, h_mask);
+            }
+        }
+        color = vec4<f32>(final_rgb, color.a);
+    }
+
     // 5.5 LUT
     if (settings.lut_intensity > 0.0) {
         let lut_color = textureSample(t_lut, s_lut, color.rgb);
@@ -584,6 +643,11 @@ uniform float u_denoise_color;
 uniform sampler2D u_curves;
 uniform float u_curves_intensity;
 uniform vec4 u_hsl[8]; // xyz = HSL adjustment, w = center hue
+uniform float u_st_shadow_hue;
+uniform float u_st_shadow_sat;
+uniform float u_st_highlight_hue;
+uniform float u_st_highlight_sat;
+uniform float u_st_balance;
 
 // Helper: Cubic Hermite
 float cubic_hermite(float a, float b, float c, float d, float t) {
@@ -864,6 +928,56 @@ void main() {
     hsl.y = clamp(hsl.y + dHSL.y, 0.0, 1.0);
     hsl.z = clamp(hsl.z + dHSL.z, 0.0, 1.0);
     color.rgb = hsl_to_rgb(hsl);
+
+    // 5.3 Split Toning
+    if (u_st_shadow_sat > 0.0 || u_st_highlight_sat > 0.0) {
+        float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+        float mid = 0.5 + u_st_balance * 0.5;
+        vec3 shadow_rgb = hsl_to_rgb(vec3(u_st_shadow_hue / 360.0, u_st_shadow_sat, 0.5));
+        vec3 highlight_rgb = hsl_to_rgb(vec3(u_st_highlight_hue / 360.0, u_st_highlight_sat, 0.5));
+        
+        float h_mask = clamp((lum - mid) / max(0.01, 1.0 - mid), 0.0, 1.0);
+        float s_mask = 1.0 - clamp(lum / max(0.01, mid), 0.0, 1.0);
+
+        vec3 final_rgb = color.rgb;
+        
+        // Shadow pass
+        if (u_st_shadow_sat > 0.0) {
+            for (int i = 0; i < 3; i++) {
+                float base = final_rgb[i];
+                float blend = shadow_rgb[i];
+                float res;
+                if (blend < 0.5) {
+                    res = base - (1.0 - 2.0 * blend) * base * (1.0 - base);
+                } else {
+                    float v;
+                    if (base <= 0.25) { v = ((16.0 * base - 12.0) * base + 4.0) * base; }
+                    else { v = sqrt(base); }
+                    res = base + (2.0 * blend - 1.0) * (v - base);
+                }
+                final_rgb[i] = mix(base, res, s_mask);
+            }
+        }
+        
+        // Highlight pass
+        if (u_st_highlight_sat > 0.0) {
+            for (int i = 0; i < 3; i++) {
+                float base = final_rgb[i];
+                float blend = highlight_rgb[i];
+                float res;
+                if (blend < 0.5) {
+                    res = base - (1.0 - 2.0 * blend) * base * (1.0 - base);
+                } else {
+                    float v;
+                    if (base <= 0.25) { v = ((16.0 * base - 12.0) * base + 4.0) * base; }
+                    else { v = sqrt(base); }
+                    res = base + (2.0 * blend - 1.0) * (v - base);
+                }
+                final_rgb[i] = mix(base, res, h_mask);
+            }
+        }
+        color.rgb = final_rgb;
+    }
 
     // 5.5 LUT 
     if (u_lut_intensity > 0.0) {

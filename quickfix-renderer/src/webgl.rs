@@ -751,6 +751,21 @@ impl WebGlRenderer {
             gl.uniform_4_f32_slice(loc("u_hsl").as_ref(), &hsl_data);
         }
 
+        // Split Toning
+        if let Some(st) = &settings.split_toning {
+            gl.uniform_1_f32(loc("u_st_shadow_hue").as_ref(), st.shadow_hue);
+            gl.uniform_1_f32(loc("u_st_shadow_sat").as_ref(), st.shadow_sat);
+            gl.uniform_1_f32(loc("u_st_highlight_hue").as_ref(), st.highlight_hue);
+            gl.uniform_1_f32(loc("u_st_highlight_sat").as_ref(), st.highlight_sat);
+            gl.uniform_1_f32(loc("u_st_balance").as_ref(), st.balance);
+        } else {
+            gl.uniform_1_f32(loc("u_st_shadow_hue").as_ref(), 0.0);
+            gl.uniform_1_f32(loc("u_st_shadow_sat").as_ref(), 0.0);
+            gl.uniform_1_f32(loc("u_st_highlight_hue").as_ref(), 0.0);
+            gl.uniform_1_f32(loc("u_st_highlight_sat").as_ref(), 0.0);
+            gl.uniform_1_f32(loc("u_st_balance").as_ref(), 0.0);
+        }
+
         gl.uniform_2_f32(loc("u_src_size").as_ref(), width as f32, height as f32);
 
         gl.viewport(0, 0, width as i32, height as i32);

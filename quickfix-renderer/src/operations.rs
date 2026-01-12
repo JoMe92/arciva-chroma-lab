@@ -1,6 +1,6 @@
 use crate::{
     ColorSettings, CropSettings, CurvesSettings, DenoiseSettings, ExposureSettings,
-    GeometrySettings, GrainSettings, HslSettings, QuickFixAdjustments,
+    GeometrySettings, GrainSettings, HslSettings, QuickFixAdjustments, SplitToningSettings,
 };
 use image::{ImageBuffer, Rgba, RgbaImage};
 use rand::SeedableRng;
@@ -81,6 +81,11 @@ pub fn process_frame_internal(
     // 7. HSL
     if let Some(hsl) = &adjustments.hsl {
         apply_hsl_in_place(&mut img, hsl);
+    }
+    
+    // 7.5 Split Toning
+    if let Some(st) = &adjustments.split_toning {
+        apply_split_toning_in_place(&mut img, st);
     }
 
     // 8. LUT
@@ -1008,6 +1013,72 @@ pub(crate) fn apply_lut_in_place(
         pixel[2] = clamp_u8(b_out * 255.0);
     }
 }
+pub(crate) fn apply_split_toning_in_place(img: &mut RgbaImage, settings: &SplitToningSettings) {
+    let shadow_h = settings.shadow_hue / 360.0;
+    let shadow_s = clamp(settings.shadow_sat, 0.0, 1.0);
+    let highlight_h = settings.highlight_hue / 360.0;
+    let highlight_s = clamp(settings.highlight_sat, 0.0, 1.0);
+    let balance = clamp(settings.balance, -1.0, 1.0);
+
+    let shadow_rgb = hsl_to_rgb([shadow_h, shadow_s, 0.5]);
+    let highlight_rgb = hsl_to_rgb([highlight_h, highlight_s, 0.5]);
+
+    for pixel in img.pixels_mut() {
+        let r = pixel[0] as f32 / 255.0;
+        let g = pixel[1] as f32 / 255.0;
+        let b = pixel[2] as f32 / 255.0;
+
+        let lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+        // Balance shifts the midpoint. Midpoint is usually 0.5.
+        // If balance is -1, midpoint is 0. If balance is 1, midpoint is 1.
+        let mid = 0.5 + balance * 0.5;
+
+        // Shadow/Highlight masks with smooth transition
+        let highlight_mask = clamp((lum - mid) / (1.0 - mid).max(0.01), 0.0, 1.0);
+        let shadow_mask = 1.0 - clamp(lum / mid.max(0.01), 0.0, 1.0);
+
+        // Blending (Soft Light behavior)
+        fn soft_light(base: f32, blend: f32) -> f32 {
+            if blend < 0.5 {
+                base - (1.0 - 2.0 * blend) * base * (1.0 - base)
+            } else {
+                base + (2.0 * blend - 1.0) * ((base.sqrt().max(base) - base) * base + base - base)
+                // Simplified soft light
+                base + (2.0 * blend - 1.0) * (if base <= 0.25 {
+                    ((16.0 * base - 12.0) * base + 4.0) * base
+                } else {
+                    base.sqrt()
+                } - base)
+            }
+        }
+
+        let mut r_out = r;
+        let mut g_out = g;
+        let mut b_out = b;
+
+        // Apply Shadow Tint
+        if shadow_s > 0.0 {
+            r_out = soft_light(r_out, shadow_rgb[0]) * shadow_mask + r_out * (1.0 - shadow_mask);
+            g_out = soft_light(g_out, shadow_rgb[1]) * shadow_mask + g_out * (1.0 - shadow_mask);
+            b_out = soft_light(b_out, shadow_rgb[2]) * shadow_mask + b_out * (1.0 - shadow_mask);
+        }
+
+        // Apply Highlight Tint
+        if highlight_s > 0.0 {
+            r_out =
+                soft_light(r_out, highlight_rgb[0]) * highlight_mask + r_out * (1.0 - highlight_mask);
+            g_out =
+                soft_light(g_out, highlight_rgb[1]) * highlight_mask + g_out * (1.0 - highlight_mask);
+            b_out =
+                soft_light(b_out, highlight_rgb[2]) * highlight_mask + b_out * (1.0 - highlight_mask);
+        }
+
+        pixel[0] = clamp_u8(r_out * 255.0);
+        pixel[1] = clamp_u8(g_out * 255.0);
+        pixel[2] = clamp_u8(b_out * 255.0);
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1347,5 +1418,23 @@ mod tests {
         assert!(px[1] < 200);
         assert!(px[0] == 0);
         assert!(px[2] == 0);
+    }
+    #[test]
+    fn test_apply_split_toning() {
+        let mut img = create_test_image(1, 1, [128, 128, 128, 255]); // Mid gray
+        let settings = SplitToningSettings {
+            shadow_hue: 200.0,    // Teal
+            shadow_sat: 0.5,
+            highlight_hue: 30.0, // Orange
+            highlight_sat: 0.5,
+            balance: 0.0,
+        };
+        apply_split_toning_in_place(&mut img, &settings);
+        let px = img.get_pixel(0, 0);
+        
+        // Mid gray should be affected by both (or neutral if masks are 0 at midpoint, 
+        // but our masks overlap mid).
+        // Let's just verify it changed.
+        assert!(px[0] != 128 || px[1] != 128 || px[2] != 128);
     }
 }

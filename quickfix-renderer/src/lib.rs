@@ -152,6 +152,16 @@ pub struct HslRangeSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct SplitToningSettings {
+    pub shadow_hue: f32,    // 0..360
+    pub shadow_sat: f32,    // 0..1
+    pub highlight_hue: f32, // 0..360
+    pub highlight_sat: f32, // 0..1
+    pub balance: f32,       // -1..1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct HslSettings {
     pub red: HslRangeSettings,
     pub orange: HslRangeSettings,
@@ -171,6 +181,7 @@ pub struct QuickFixAdjustments {
     pub color: Option<ColorSettings>,
     pub curves: Option<CurvesSettings>,
     pub hsl: Option<HslSettings>,
+    pub split_toning: Option<SplitToningSettings>,
     pub grain: Option<GrainSettings>,
     pub geometry: Option<GeometrySettings>,
     pub denoise: Option<DenoiseSettings>,
@@ -267,6 +278,14 @@ export interface HslSettings {
     magenta: HslRangeSettings;
 }
 
+export interface SplitToningSettings {
+    shadowHue: number;
+    shadowSat: number;
+    highlightHue: number;
+    highlightSat: number;
+    balance: number;
+}
+
 export interface ChannelCurve {
     points: CurvePoint[];
 }
@@ -282,6 +301,7 @@ export interface QuickFixAdjustments {
     color?: ColorSettings;
     curves?: CurvesSettings;
     hsl?: HslSettings;
+    splitToning?: SplitToningSettings;
     grain?: GrainSettings;
     geometry?: GeometrySettings;
     denoise?: DenoiseSettings;

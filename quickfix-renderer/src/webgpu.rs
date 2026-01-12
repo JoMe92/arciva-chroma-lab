@@ -31,7 +31,14 @@ struct SettingsUniform {
     denoise_luminance: f32,
     denoise_color: f32,
     curves_intensity: f32,
+    st_shadow_hue: f32,
+    st_shadow_sat: f32,
+    st_highlight_hue: f32,
+    st_highlight_sat: f32,
+    st_balance: f32,
     _padding: f32,
+    _padding2: f32,
+    _padding3: f32,
     hsl: [[f32; 4]; 8],
 }
 
