@@ -107,7 +107,14 @@ function App() {
   const [stShadowSat, setStShadowSat] = useState(0);
   const [stHighlightHue, setStHighlightHue] = useState(30); // Default Orange-ish
   const [stHighlightSat, setStHighlightSat] = useState(0);
+
   const [stBalance, setStBalance] = useState(0);
+
+  // Vignette
+  const [vAmount, setVAmount] = useState(0);
+  const [vMidpoint, setVMidpoint] = useState(0.5);
+  const [vRoundness, setVRoundness] = useState(0);
+  const [vFeather, setVFeather] = useState(0.5);
 
   const handleLutUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -351,6 +358,12 @@ function App() {
           highlightHue: stHighlightHue,
           highlightSat: stHighlightSat,
           balance: stBalance
+        },
+        vignette: {
+          amount: vAmount,
+          midpoint: vMidpoint,
+          roundness: vRoundness,
+          feather: vFeather
         }
       };
 
@@ -452,7 +465,7 @@ function App() {
 
     render();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity, denoiseLuminance, denoiseColor, curves, hsl, stShadowHue, stShadowSat, stHighlightHue, stHighlightSat, stBalance]);
+  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity, denoiseLuminance, denoiseColor, curves, hsl, stShadowHue, stShadowSat, stHighlightHue, stHighlightSat, stBalance, vAmount, vMidpoint, vRoundness, vFeather]);
 
   // Handle Canvas Click for WB Picking
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -767,6 +780,43 @@ function App() {
                   </div>
                 </div>
               ))}
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Vignette</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Amount</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{vAmount}</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.05" value={vAmount} onChange={e => setVAmount(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Midpoint</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{vMidpoint}</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.05" value={vMidpoint} onChange={e => setVMidpoint(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Roundness</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{vRoundness}</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.05" value={vRoundness} onChange={e => setVRoundness(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Feather</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{vFeather}</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.05" value={vFeather} onChange={e => setVFeather(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
             </div>
           </section>
 

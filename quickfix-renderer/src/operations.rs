@@ -1,6 +1,7 @@
 use crate::{
     ColorSettings, CropSettings, CurvesSettings, DenoiseSettings, ExposureSettings,
     GeometrySettings, GrainSettings, HslSettings, QuickFixAdjustments, SplitToningSettings,
+    VignetteSettings,
 };
 use image::{ImageBuffer, Rgba, RgbaImage};
 use rand::SeedableRng;
@@ -91,6 +92,11 @@ pub fn process_frame_internal(
     // 8. LUT
     if let (Some(lut_settings), Some((lut_data, lut_size))) = (&adjustments.lut, lut_buffer) {
         apply_lut_in_place(&mut img, lut_data, lut_size, lut_settings);
+    }
+
+    // 8.5 Vignette
+    if let Some(vignette) = &adjustments.vignette {
+        apply_vignette_in_place(&mut img, vignette);
     }
 
     // 9. Grain
@@ -1079,6 +1085,90 @@ pub(crate) fn apply_split_toning_in_place(img: &mut RgbaImage, settings: &SplitT
     }
 }
 
+pub(crate) fn apply_vignette_in_place(img: &mut RgbaImage, settings: &VignetteSettings) {
+    if settings.amount.abs() < 1e-4 {
+        return;
+    }
+
+    let (width, height) = img.dimensions();
+    let center_x = width as f32 / 2.0;
+    let center_y = height as f32 / 2.0;
+
+    // Normalize coordinates to [0, 1] relative to center
+    let radius_max_x = center_x;
+    let radius_max_y = center_y;
+
+    let roundness = clamp(settings.roundness, -1.0, 1.0);
+    // +1.0 = Rectangle, 0.0 = Oval
+
+    let feather = clamp(settings.feather, 0.0, 1.0);
+    let amount = clamp(settings.amount, -1.0, 1.0);
+    let midpoint = clamp(settings.midpoint, 0.0, 1.0);
+
+    for y in 0..height {
+        let dy = (y as f32 - center_y) / radius_max_y; // -1..1
+        let dy_abs = dy.abs();
+        let dy_sq = dy * dy;
+
+        for x in 0..width {
+            let dx = (x as f32 - center_x) / radius_max_x; // -1..1
+            let dx_abs = dx.abs();
+            let dx_sq = dx * dx;
+
+            // Distance calculation
+            let dist_oval = (dx_sq + dy_sq).sqrt();
+            let dist_rect = dx_abs.max(dy_abs);
+
+            let dist = if roundness >= 0.0 {
+                // Blend Oval -> Rect
+                dist_oval * (1.0 - roundness) + dist_rect * roundness
+            } else {
+                dist_oval
+            };
+
+            // Vignette Falloff
+            let low = midpoint * (1.0 - 0.9 * feather);
+            let high = 1.0 + feather;
+
+            let t = (dist - low) / (high - low).max(1e-5);
+            let t = clamp(t, 0.0, 1.0);
+
+            // Smoothstep
+            let mask = t * t * (3.0 - 2.0 * t);
+
+            if mask > 0.0 {
+                let pixel = img.get_pixel_mut(x, y);
+
+                let r = pixel[0] as f32 / 255.0;
+                let g = pixel[1] as f32 / 255.0;
+                let b = pixel[2] as f32 / 255.0;
+
+                let mut r_out = r;
+                let mut g_out = g;
+                let mut b_out = b;
+
+                if amount < 0.0 {
+                    // Darken
+                    let factor = 1.0 - mask * amount.abs();
+                    r_out *= factor;
+                    g_out *= factor;
+                    b_out *= factor;
+                } else {
+                    // Lighten (White vignette)
+                    let factor = mask * amount;
+                    r_out = r_out + (1.0 - r_out) * factor;
+                    g_out = g_out + (1.0 - g_out) * factor;
+                    b_out = b_out + (1.0 - b_out) * factor;
+                }
+
+                pixel[0] = clamp_u8(r_out * 255.0);
+                pixel[1] = clamp_u8(g_out * 255.0);
+                pixel[2] = clamp_u8(b_out * 255.0);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1435,5 +1525,35 @@ mod tests {
         // but our masks overlap mid).
         // Let's just verify it changed.
         assert!(px[0] != 128 || px[1] != 128 || px[2] != 128);
+    }
+
+    #[test]
+    fn test_apply_vignette() {
+        // Create white image
+        let width = 100;
+        let height = 100;
+        let mut img = create_test_image(width, height, [255, 255, 255, 255]);
+
+        let settings = VignetteSettings {
+            amount: -1.0, // Full darkness
+            midpoint: 0.5,
+            roundness: 0.0, // Oval
+            feather: 0.5,
+        };
+
+        apply_vignette_in_place(&mut img, &settings);
+
+        let center = img.get_pixel(width / 2, height / 2);
+        let corner = img.get_pixel(0, 0);
+
+        // Center should be largely unaffected (white)
+        assert!(center[0] > 240);
+
+        // Corner should be significantly darkened
+        assert!(corner[0] < 100);
+
+        // Verify output is grayish (keeps saturation balance on white image)
+        assert_eq!(corner[0], corner[1]);
+        assert_eq!(corner[1], corner[2]);
     }
 }

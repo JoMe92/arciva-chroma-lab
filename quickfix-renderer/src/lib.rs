@@ -185,7 +185,18 @@ pub struct QuickFixAdjustments {
     pub grain: Option<GrainSettings>,
     pub geometry: Option<GeometrySettings>,
     pub denoise: Option<DenoiseSettings>,
+
     pub lut: Option<Lut3DSettings>,
+    pub vignette: Option<VignetteSettings>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VignetteSettings {
+    pub amount: f32, // 0.0 to 1.0 (or -1.0 to 1.0 if supporting white vignette?) Users usually want dark. Let's assume -1.0 to 1.0 where < 0 is dark.
+    pub midpoint: f32, // 0.0 to 1.0 (size of clear area)
+    pub roundness: f32, // -1.0 to 1.0 (shape, square vs circle)
+    pub feather: f32, // 0.0 to 1.0 (smoothness)
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -286,6 +297,13 @@ export interface SplitToningSettings {
     balance: number;
 }
 
+export interface VignetteSettings {
+    amount: number;
+    midpoint: number;
+    roundness: number;
+    feather: number;
+}
+
 export interface ChannelCurve {
     points: CurvePoint[];
 }
@@ -306,6 +324,7 @@ export interface QuickFixAdjustments {
     geometry?: GeometrySettings;
     denoise?: DenoiseSettings;
     lut?: Lut3DSettings;
+    vignette?: VignetteSettings;
 }
 "#;
 
