@@ -1306,4 +1306,46 @@ mod tests {
         // Original: 100, Full curve: 200. Intensity 0.5 -> 150.
         assert!(px[0] > 140 && px[0] < 160);
     }
+
+    #[test]
+    fn test_rgb_hsl_conversion() {
+        let rgb = [1.0, 0.0, 0.0]; // Red
+        let hsl = rgb_to_hsl(rgb);
+        assert!((hsl[0] - 0.0).abs() < 1e-5);
+        assert!((hsl[1] - 1.0).abs() < 1e-5);
+        assert!((hsl[2] - 0.5).abs() < 1e-5);
+
+        let rgb_back = hsl_to_rgb(hsl);
+        assert!((rgb_back[0] - 1.0).abs() < 1e-5);
+        assert!((rgb_back[1] - 0.0).abs() < 1e-5);
+        assert!((rgb_back[2] - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_apply_hsl_red_saturation() {
+        let mut img = create_test_image(1, 1, [255, 0, 0, 255]); // Pure Red
+        let mut settings = HslSettings::default();
+        settings.red.saturation = 0.5; // Boost saturation (even though already 1.0, test rounding/clamping)
+
+        // Let's test desaturation instead to be sure
+        settings.red.saturation = -1.0;
+        apply_hsl_in_place(&mut img, &settings);
+        let px = img.get_pixel(0, 0);
+        // Red is at hue 0. Should be gray now.
+        assert!(px[0] == px[1] && px[1] == px[2]);
+        assert!(px[0] > 120 && px[0] < 130); // 0.5 luminance -> ~127
+    }
+
+    #[test]
+    fn test_apply_hsl_green_luminance() {
+        let mut img = create_test_image(1, 1, [0, 255, 0, 255]); // Pure Green
+        let mut settings = HslSettings::default();
+        settings.green.luminance = -0.5; // Darken
+        apply_hsl_in_place(&mut img, &settings);
+        let px = img.get_pixel(0, 0);
+        // Should be darker green
+        assert!(px[1] < 200);
+        assert!(px[0] == 0);
+        assert!(px[2] == 0);
+    }
 }
