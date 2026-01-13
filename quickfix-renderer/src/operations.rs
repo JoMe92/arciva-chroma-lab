@@ -1,4 +1,3 @@
-#[cfg(target_arch = "wasm32")]
 use crate::{
     ClaritySettings, ColorSettings, CropSettings, CurvesSettings, DehazeSettings, DenoiseSettings,
     ExposureSettings, GeometrySettings, GrainSettings, HslSettings, LensDistortionSettings,
@@ -2613,9 +2612,9 @@ mod tests {
     use super::*;
     use crate::{ChannelCurve, CropRect, CurvePoint};
     use crate::{
-        ClaritySettings, ColorSettings, CropSettings, DehazeSettings, ExposureSettings,
-        GeometrySettings, GrainSettings, HslSettings, LensDistortionSettings, QuickFixAdjustments,
-        SharpenSettings, SplitToningSettings, VignetteSettings,
+        ClaritySettings, ColorSettings, CropSettings, CurvesSettings, DehazeSettings,
+        DenoiseSettings, ExposureSettings, GeometrySettings, HslSettings,
+        LensDistortionSettings, SharpenSettings, SplitToningSettings, VignetteSettings,
     };
 
     fn create_test_image(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {
