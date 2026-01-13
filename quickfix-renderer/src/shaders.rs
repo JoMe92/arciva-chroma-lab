@@ -8,8 +8,22 @@ struct VertexOutput {
 // Uniforms
 struct Settings {
     // Geometry
-    geo_vertical: f32,
-    geo_horizontal: f32,
+    homography_matrix: mat3x3<f32>,
+    geo_padding: f32, // Padding to align 16 bytes? mat3x3 takes 3 vec3s.
+    // WGSL struct layout rules: mat3x3<f32> is 3 columns of vec3.
+    // Each column is 16-byte aligned (vec3 is treated as vec4 size in uniform buffers usually).
+    // So 3 * 16 = 48 bytes.
+    // Next field starts at offset 48.
+    
+    // Flips - keep for now as they are applied separately or integrated? 
+    // Plan says "Geometry Settings already has vertical/horizontal".
+    // We passed them as 'v, h' floats before.
+    // Now we pass matrix.
+    // The matrix handles the Warp.
+    // Flips are usually independent?
+    // Let's keep flips separate for now.
+    flip_vertical: f32,
+    flip_horizontal: f32, // 0.0 or 1.0
     
     // Crop/Rotate
     crop_rotation: f32, // radians
@@ -32,6 +46,24 @@ struct Settings {
     // Dimensions
     src_width: f32,
     src_height: f32,
+
+    // LUT
+    lut_intensity: f32,
+    
+    // Denoise
+    denoise_luminance: f32,
+    denoise_color: f32, 
+    curves_intensity: f32,
+    st_shadow_hue: f32,
+    st_shadow_sat: f32,
+    st_highlight_hue: f32,
+    st_highlight_sat: f32,
+    st_balance: f32,
+    padding3: f32,
+    distortion_k1: f32,
+    distortion_k2: f32,
+    hsl_enabled: f32,
+    hsl: array<vec4<f32>, 8>,
 };
 
 @group(0) @binding(0) var<uniform> settings: Settings;
@@ -39,6 +71,10 @@ struct Settings {
 @group(0) @binding(2) var s_diffuse: sampler;
 @group(0) @binding(3) var t_grain: texture_2d<f32>; // Pre-seeded noise texture
 @group(0) @binding(4) var s_grain: sampler;
+@group(0) @binding(5) var t_lut: texture_3d<f32>;
+@group(0) @binding(6) var s_lut: sampler;
+@group(0) @binding(7) var t_curves: texture_2d<f32>;
+@group(0) @binding(8) var s_curves: sampler;
 
 // Helper: Bicubic sampling
 fn cubic_hermite(a: f32, b: f32, c: f32, d: f32, t: f32) -> f32 {
@@ -107,6 +143,165 @@ fn sample_bicubic(uv: vec2<f32>) -> vec4<f32> {
     );
 }
 
+fn rgb_to_yuv(rgb: vec3<f32>) -> vec3<f32> {
+    let y = dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
+    let u = 0.492 * (rgb.b - y);
+    let v = 0.877 * (rgb.r - y);
+    return vec3<f32>(y, u, v);
+}
+
+fn yuv_to_rgb(yuv: vec3<f32>) -> vec3<f32> {
+    let y = yuv.x;
+    let u = yuv.y;
+    let v = yuv.z;
+    let r = y + 1.13983 * v;
+    let g = y - 0.39465 * u - 0.58060 * v;
+    let b = y + 2.03211 * u;
+    return vec3<f32>(r, g, b);
+}
+
+fn rgb_to_hsl(rgb: vec3<f32>) -> vec3<f32> {
+    let max_val = max(rgb.r, max(rgb.g, rgb.b));
+    let min_val = min(rgb.r, min(rgb.g, rgb.b));
+    let delta = max_val - min_val;
+
+    var h: f32 = 0.0;
+    if (delta > 0.0) {
+        if (max_val == rgb.r) {
+            h = (rgb.g - rgb.b) / delta;
+            if (h < 0.0) { h += 6.0; }
+        } else if (max_val == rgb.g) {
+            h = (rgb.b - rgb.r) / delta + 2.0;
+        } else {
+            h = (rgb.r - rgb.g) / delta + 4.0;
+        }
+        h /= 6.0;
+    }
+
+    let l = (max_val + min_val) / 2.0;
+    var s: f32 = 0.0;
+    if (delta > 0.0) {
+        s = delta / (1.0 - abs(2.0 * l - 1.0));
+    }
+    return vec3<f32>(h, s, l);
+}
+
+fn hsl_to_rgb(hsl: vec3<f32>) -> vec3<f32> {
+    let h = hsl.x;
+    let s = hsl.y;
+    let l = hsl.z;
+    let c = (1.0 - abs(2.0 * l - 1.0)) * s;
+    let x = c * (1.0 - abs(f32(h * 6.0) % 2.0 - 1.0));
+    let m = l - c / 2.0;
+    var rgb: vec3<f32>;
+    if (h < 1.0/6.0) { rgb = vec3<f32>(c, x, 0.0); }
+    else if (h < 2.0/6.0) { rgb = vec3<f32>(x, c, 0.0); }
+    else if (h < 3.0/6.0) { rgb = vec3<f32>(0.0, c, x); }
+    else if (h < 4.0/6.0) { rgb = vec3<f32>(0.0, x, c); }
+    else if (h < 5.0/6.0) { rgb = vec3<f32>(x, 0.0, c); }
+    else { rgb = vec3<f32>(c, 0.0, x); }
+    return rgb + vec3<f32>(m);
+}
+
+// Lens Distortion Helper
+fn distort_uv(uv: vec2<f32>) -> vec2<f32> {
+    if (settings.distortion_k1 == 0.0 && settings.distortion_k2 == 0.0) {
+        return uv;
+    }
+    let center = vec2<f32>(0.5, 0.5);
+    let rel = uv - center;
+    let r2 = dot(rel, rel);
+    let scaling = 1.0 + settings.distortion_k1 * r2 + settings.distortion_k2 * r2 * r2;
+    return center + rel * scaling;
+}
+
+fn sample_denoised(uv: vec2<f32>) -> vec4<f32> {
+    // If no denoise, just sample
+    if (settings.denoise_luminance <= 0.0 && settings.denoise_color <= 0.0) {
+        return sample_bicubic(uv);
+    }
+    
+    let tex_size = vec2<f32>(settings.src_width, settings.src_height);
+    let step = 1.0 / tex_size;
+    
+    var center_col = sample_bicubic(uv);
+    var center_yuv = rgb_to_yuv(center_col.rgb);
+    
+    // Parameters
+    // Luma strength controls sigma_r (range) for bilateral
+    // Color strength controls sigma_s (spatial) for box/gaussian blur on Chroma
+    
+    // Using a 5x5 kernel
+    var final_y = 0.0;
+    var final_u = 0.0;
+    var final_v = 0.0;
+    var weight_total_y = 0.0;
+    var weight_total_c = 0.0;
+    
+    let sigma_s = 2.0; // Spatial sigma
+    
+    // Range sigma for Bilateral: related to denoise_luminance. 
+    // If denoise is high, sigma_r is high (more blurring across edges).
+    // If denoise is low, sigma_r is low (preserve edges strictly).
+    // Let's map 0..1 to sensible range. E.g. 0.01 to 0.3?
+    let sigma_r = max(0.001, settings.denoise_luminance * 0.4);
+    
+    // Chroma blur radius/strength
+    // For chroma, we just do spatial blur.
+    
+    for (var i = -2; i <= 2; i++) {
+        for (var j = -2; j <= 2; j++) {
+            let offset = vec2<f32>(f32(i), f32(j)) * step;
+            let sample_uv = clamp(uv + offset, vec2<f32>(0.0), vec2<f32>(1.0));
+            // Optimization: Use bilinear for neighbor samples to save perf
+            let col = textureSampleLevel(t_diffuse, s_diffuse, sample_uv, 0.0);
+            let yuv = rgb_to_yuv(col.rgb);
+            
+            // Spatial Filtering Weight (Gaussian)
+            let dist_sq = f32(i*i + j*j);
+            let w_spatial = exp(-dist_sq / (2.0 * sigma_s * sigma_s));
+            
+            // 1. Luminance (Bilateral)
+            let diff_y = abs(yuv.x - center_yuv.x);
+            let w_range = exp(-(diff_y * diff_y) / (2.0 * sigma_r * sigma_r));
+            let w_y = w_spatial * w_range;
+            
+            if (settings.denoise_luminance > 0.0) {
+                final_y += yuv.x * w_y;
+                weight_total_y += w_y;
+            } else {
+                // If luma denoise off, we just take center later, but let's accumulate
+                // to keep logic unified or just break?
+            }
+            
+            // 2. Color (Gaussian Blur on U/V)
+            // If denoise_color > 0, we use spatial weights.
+            if (settings.denoise_color > 0.0) {
+                 final_u += yuv.y * w_spatial;
+                 final_v += yuv.z * w_spatial;
+                 weight_total_c += w_spatial;
+            }
+        }
+    }
+    
+    var out_y = center_yuv.x;
+    var out_u = center_yuv.y;
+    var out_v = center_yuv.z;
+    
+    if (settings.denoise_luminance > 0.0 && weight_total_y > 0.0) {
+        out_y = final_y / weight_total_y;
+    }
+    
+    if (settings.denoise_color > 0.0 && weight_total_c > 0.0) {
+         out_u = final_u / weight_total_c;
+         out_v = final_v / weight_total_c;
+    }
+    
+    let out_rgb = yuv_to_rgb(vec3<f32>(out_y, out_u, out_v));
+    // Mix with original alpha
+    return vec4<f32>(out_rgb, center_col.a);
+}
+
 // Vertex Shader
 @vertex
 fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
@@ -115,24 +310,7 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
     let x = f32(i32(in_vertex_index) - 1);
     let y = f32(i32(in_vertex_index & 1u) * 2 - 1);
     out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>(x * 0.5 + 0.5, 0.5 - y * 0.5); // 0..1
-    // Adjust UV for coordinate system if needed (WebGPU is Y-down in NDC? No, Y-up in NDC, but texture coords are usually top-left 0,0)
-    // Actually, let's just use standard quad:
-    // 0: -1, -1 (0, 1)
-    // 1:  3, -1 (2, 1)
-    // 2: -1,  3 (0, -1)
-    // UVs:
-    // 0: 0, 1
-    // 1: 2, 1
-    // 2: 0, -1
-    // This covers 0,0 to 1,1 in the bottom-left 0..1 range.
-    
-    // Let's use a simpler quad strip or indexed draw if we want, but full screen triangle is standard.
-    // uv = (pos + 1) / 2.
-    // In WebGPU, texture coords: 0,0 is top-left.
-    // NDC: -1,-1 is bottom-left.
-    // So if y is -1 (bottom), v should be 1.
-    // If y is 1 (top), v should be 0.
+    // Standard Quad UVs: 0,0 top-left (WebGPU texture space)
     out.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
     
     return out;
@@ -143,47 +321,43 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var uv = in.uv;
     
-    // 1. Geometry (Warp)
-    // Inverse mapping: find where current UV comes from in source
-    // Bilinear warp approximation
-    let v = clamp(settings.geo_vertical, -1.0, 1.0);
-    let h = clamp(settings.geo_horizontal, -1.0, 1.0);
+    // 0. Flips
+    // Apply flips BEFORE geometry warp / crop (Inverse logic: Modify UVs)
+    // If we want to flip the "Source", we modify the UVs we are about to sample with.
+    // If flip_h is true, uv.x = 1.0 - uv.x?
+    // Let's trace: Output pixel at x=0.1.
+    // If flipped, it should come from Source x=0.9.
+    // So uv.x = 1.0 - uv.x. Correct.
+    // Wait, geometry warp applies to the "Source Quad".
+    // If we flip, do we flip the quad or the content?
+    // Usually "Geometry" tool (skew) assumes it works on the original image orientation.
+    // If we flip FIRST (as requested: Flip -> Geometry), then we flip the content that enters the Geometry phase.
+    // So in inverse mapping: Start with Output UV.
+    // 1. Un-Crop/Un-Rotate (Inverse) -> done below.
+    // 2. Un-Warp (Inverse) -> done below.
+    // 3. Un-Flip (Inverse) -> do here?
+    // Wait, the shader steps traverse backwards from Output -> Source.
+    // Output -> [Crop/Rotate] -> [Geometry] -> [Flip] -> Source Image.
+    // So yes, Flip is applied LAST in the shader (closest to texture sample).
     
-    if (abs(v) > 0.0001 || abs(h) > 0.0001) {
-        let max_x_offset = 0.25;
-        let max_y_offset = 0.25;
-        
-        let top_inset = v * max_x_offset;
-        let bottom_inset = -v * max_x_offset;
-        let left_y = h * max_y_offset;
-        let right_y = -h * max_y_offset;
-        
-        // Corners in UV space (0..1)
-        // We want to map the unit square UV to the distorted quad.
-        // Actually, we want the inverse: For a pixel in the output (unit square), where is it in the source?
-        // The source is the distorted quad? No, the source is the original image (unit square).
-        // The output is the distorted image.
-        // So we map Output UV -> Source UV.
-        // If we pull the top corners in (positive vertical), we are "zooming out" the top.
-        // So we need to sample a WIDER area of the source at the top.
-        // So Source UV range at top > 1.0?
-        // Wait, the Python implementation:
-        // "Calculate quad corners (source coordinates mapped to destination)"
-        // It maps Source (0..W, 0..H) to Destination Quad.
-        // Then it iterates Destination pixels and interpolates Source coordinates.
-        // So we do the same here.
-        // We interpolate the Source UVs based on current UV.
-        
-        let ul = vec2<f32>(0.0 + top_inset, 0.0 + left_y);
-        let ll = vec2<f32>(0.0 + bottom_inset, 1.0 - left_y); // 1.0 because UV y is 0..1
-        let lr = vec2<f32>(1.0 - bottom_inset, 1.0 - right_y);
-        let ur = vec2<f32>(1.0 - top_inset, 0.0 + right_y);
-        
-        // Bilinear interpolation of these corners based on current UV
-        // P(u,v) = mix(mix(ul, ur, u), mix(ll, lr, u), v)
-        let top = mix(ul, ur, uv.x);
-        let bottom = mix(ll, lr, uv.x);
-        uv = mix(top, bottom, uv.y);
+    // BUT! The `apply_geometry` logic in CPU does Flip *inside* the geometry loop, essentially modifying the source coordinate.
+    // `sample_bicubic(img, sx, sy)` where `sx` is flipped if needed.
+    // So if we integrate logic here:
+    // We calculate the Source UV where we want to sample.
+    // AND THEN flip it if needed.
+    
+    // 1. Geometry (Warp)
+    // Homography Transform
+    // Map Output UV (0..1) to Source UV
+    // Homogenize UV: (u, v, 1)
+    
+    let src_h = settings.homography_matrix * vec3<f32>(uv, 1.0);
+    
+    // Perspective Divide
+    if (abs(src_h.z) > 0.00001) {
+        uv = src_h.xy / src_h.z;
+    } else {
+        uv = src_h.xy;
     }
     
     // 2. Crop / Rotate
@@ -238,15 +412,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
     
-    // Check bounds
+    // Sample Texture
+    // Distort UV
+    uv = distort_uv(uv);
+
+    // Check bounds after distortion (since we might pull from outside)
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
-    
-    // Sample Texture
+
     // Use bicubic if enabled/needed, or bilinear for speed.
     // For now, let's use the bicubic function we wrote.
-    var color = sample_bicubic(uv);
+    var color = sample_denoised(uv);
     
     // 3. Exposure
     let exposure_factor = pow(2.0, settings.exposure);
@@ -293,7 +470,103 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         );
     }
     
-    // 5. Grain
+    // 5. Curves
+    let curve_r = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.r, 0.5), 0.0).r;
+    let curve_g = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.g, 0.5), 0.0).g;
+    let curve_b = textureSampleLevel(t_curves, s_curves, vec2<f32>(color.b, 0.5), 0.0).b;
+    let curved_color = vec3<f32>(curve_r, curve_g, curve_b);
+    color = vec4<f32>(mix(color.rgb, curved_color, settings.curves_intensity), color.a);
+
+    // 5.2 HSL Tuning
+    if (settings.hsl_enabled > 0.5) {
+        var hsl = rgb_to_hsl(color.rgb);
+        let centers = array<f32, 8>(0.0, 30.0/360.0, 60.0/360.0, 120.0/360.0, 180.0/360.0, 240.0/360.0, 270.0/360.0, 300.0/360.0);
+        
+        var dH: f32 = 0.0;
+        var dS: f32 = 0.0;
+        var dL: f32 = 0.0;
+        
+        for (var i = 0; i < 8; i++) {
+            var dist = abs(hsl.x - centers[i]);
+            if (dist > 0.5) { dist = 1.0 - dist; }
+            
+            let width = 60.0 / 360.0;
+            if (dist < width) {
+                let t = dist / width;
+                let weight = 1.0 - t * t * (3.0 - 2.0 * t);
+                
+                dH += settings.hsl[i].x * weight;
+                dS += settings.hsl[i].y * weight;
+                dL += settings.hsl[i].z * weight;
+            }
+        }
+        
+        hsl.x = (hsl.x + dH * (30.0 / 360.0)) % 1.0;
+        if (hsl.x < 0.0) { hsl.x += 1.0; }
+        hsl.y = clamp(hsl.y + dS, 0.0, 1.0);
+        hsl.z = clamp(hsl.z + dL, 0.0, 1.0);
+        color = vec4<f32>(hsl_to_rgb(hsl), color.a);
+    }
+
+    // 5.3 Split Toning
+    if (settings.st_shadow_sat > 0.0 || settings.st_highlight_sat > 0.0) {
+        let lum = dot(color.rgb, vec3<f32>(0.299, 0.587, 0.114));
+        let mid = 0.5 + settings.st_balance * 0.5;
+        let shadow_rgb = hsl_to_rgb(vec3<f32>(settings.st_shadow_hue / 360.0, settings.st_shadow_sat, 0.5));
+        let highlight_rgb = hsl_to_rgb(vec3<f32>(settings.st_highlight_hue / 360.0, settings.st_highlight_sat, 0.5));
+        
+        // Masks
+        let h_mask = clamp((lum - mid) / max(0.01, 1.0 - mid), 0.0, 1.0);
+        let s_mask = 1.0 - clamp(lum / max(0.01, mid), 0.0, 1.0);
+
+        // Soft Light
+        var final_rgb = color.rgb;
+        
+        // Shadow pass
+        if (settings.st_shadow_sat > 0.0) {
+            for (var i = 0; i < 3; i++) {
+                let base = final_rgb[i];
+                let blend = shadow_rgb[i];
+                var res: f32;
+                if (blend < 0.5) {
+                    res = base - (1.0 - 2.0 * blend) * base * (1.0 - base);
+                } else {
+                    var v: f32;
+                    if (base <= 0.25) { v = ((16.0 * base - 12.0) * base + 4.0) * base; }
+                    else { v = sqrt(base); }
+                    res = base + (2.0 * blend - 1.0) * (v - base);
+                }
+                final_rgb[i] = mix(base, res, s_mask);
+            }
+        }
+        
+        // Highlight pass
+        if (settings.st_highlight_sat > 0.0) {
+            for (var i = 0; i < 3; i++) {
+                let base = final_rgb[i];
+                let blend = highlight_rgb[i];
+                var res: f32;
+                if (blend < 0.5) {
+                    res = base - (1.0 - 2.0 * blend) * base * (1.0 - base);
+                } else {
+                    var v: f32;
+                    if (base <= 0.25) { v = ((16.0 * base - 12.0) * base + 4.0) * base; }
+                    else { v = sqrt(base); }
+                    res = base + (2.0 * blend - 1.0) * (v - base);
+                }
+                final_rgb[i] = mix(base, res, h_mask);
+            }
+        }
+        color = vec4<f32>(final_rgb, color.a);
+    }
+
+    // 5.5 LUT
+    if (settings.lut_intensity > 0.0) {
+        let lut_color = textureSample(t_lut, s_lut, color.rgb);
+        color = vec4<f32>(mix(color.rgb, lut_color.rgb, settings.lut_intensity), color.a); 
+    }
+
+    // 6. Grain
     if (settings.grain_amount > 0.0) {
         // Sample grain texture
         // Grain texture is tiled.
@@ -309,11 +582,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Python noise is Normal(0, sigma).
         // We should probably upload noise as centered around 0.5 or just add (noise - 0.5).
         // Let's assume texture is 0..1, representing -sigma..sigma?
-        // No, let's assume texture is raw noise values normalized.
-        // Easier: Texture contains pre-computed noise * 128 + 128.
-        // So (val - 0.5) * 2 * sigma.
-        
-        // Actually, let's just say the texture contains standard normal noise mapped to 0..1?
         // No, precision issues.
         // Let's say texture contains noise in -1..1 range (f32 texture) or 0..1 (unorm).
         // Let's assume 0..1 where 0.5 is 0.
@@ -367,8 +635,9 @@ out vec4 out_color;
 uniform sampler2D u_texture;
 uniform sampler2D u_grain;
 
-uniform float u_geo_vertical;
-uniform float u_geo_horizontal;
+uniform mat3 u_homography_matrix;
+uniform float u_flip_vertical;
+uniform float u_flip_horizontal;
 uniform float u_crop_rotation;
 uniform float u_crop_aspect;
 uniform float u_exposure;
@@ -380,8 +649,26 @@ uniform float u_tint;
 uniform float u_grain_amount;
 uniform float u_grain_size;
 uniform vec2 u_src_size;
+uniform sampler3D u_lut;
+uniform float u_lut_intensity;
+uniform float u_denoise_luminance;
+uniform float u_denoise_color;
+uniform sampler2D u_curves;
+uniform float u_curves_intensity;
+uniform float u_distortion_k1;
+uniform float u_distortion_k2;
+uniform float u_hsl_enabled;
+uniform vec4 u_hsl[8]; // xyz = HSL adjustment, w = center hue
+uniform float u_st_shadow_hue;
+uniform float u_st_shadow_sat;
+uniform float u_st_highlight_hue;
+uniform float u_st_highlight_sat;
+uniform float u_st_balance;
 
-// Helper: Cubic Hermite
+
+
+
+
 float cubic_hermite(float a, float b, float c, float d, float t) {
     float a_val = -a / 2.0 + (3.0 * b) / 2.0 - (3.0 * c) / 2.0 + d / 2.0;
     float b_val = a - (5.0 * b) / 2.0 + 2.0 * c - d / 2.0;
@@ -422,30 +709,156 @@ vec4 sample_bicubic(vec2 uv) {
     );
 }
 
+vec3 rgb_to_yuv(vec3 rgb) {
+    float y = dot(rgb, vec3(0.299, 0.587, 0.114));
+    float u = 0.492 * (rgb.b - y);
+    float v = 0.877 * (rgb.r - y);
+    return vec3(y, u, v);
+}
+
+vec3 yuv_to_rgb(vec3 yuv) {
+    float y = yuv.x;
+    float u = yuv.y;
+    float v = yuv.z;
+    float r = y + 1.13983 * v;
+    float g = y - 0.39465 * u - 0.58060 * v;
+    float b = y + 2.03211 * u;
+    return vec3(r, g, b);
+}
+
+vec3 rgb_to_hsl(vec3 rgb) {
+    float max_val = max(rgb.r, max(rgb.g, rgb.b));
+    float min_val = min(rgb.r, min(rgb.g, rgb.b));
+    float delta = max_val - min_val;
+
+    float h = 0.0;
+    if (delta > 0.0) {
+        if (max_val == rgb.r) {
+            h = mod((rgb.g - rgb.b) / delta, 6.0);
+        } else if (max_val == rgb.g) {
+            h = (rgb.b - rgb.r) / delta + 2.0;
+        } else {
+            h = (rgb.r - rgb.g) / delta + 4.0;
+        }
+        h /= 6.0;
+        if (h < 0.0) h += 1.0;
+    }
+
+    float l = (max_val + min_val) / 2.0;
+    float s = 0.0;
+    if (delta > 0.0) {
+        s = delta / (1.0 - abs(2.0 * l - 1.0));
+    }
+    return vec3(h, s, l);
+}
+
+vec3 hsl_to_rgb(vec3 hsl) {
+    float h = hsl.x;
+    float s = hsl.y;
+    float l = hsl.z;
+    float c = (1.0 - abs(2.0 * l - 1.0)) * s;
+    float x = c * (1.0 - abs(mod(h * 6.0, 2.0) - 1.0));
+    float m = l - c / 2.0;
+    vec3 rgb;
+    if (h < 1.0/6.0) rgb = vec3(c, x, 0.0);
+    else if (h < 2.0/6.0) rgb = vec3(x, c, 0.0);
+    else if (h < 3.0/6.0) rgb = vec3(0.0, c, x);
+    else if (h < 4.0/6.0) rgb = vec3(0.0, x, c);
+    else if (h < 5.0/6.0) rgb = vec3(x, 0.0, c);
+    else rgb = vec3(c, 0.0, x);
+    return rgb + m;
+}
+
+vec2 distort_uv(vec2 uv) {
+    if (u_distortion_k1 == 0.0 && u_distortion_k2 == 0.0) {
+        return uv;
+    }
+    vec2 center = vec2(0.5);
+    vec2 rel = uv - center;
+    float r2 = dot(rel, rel);
+    float scaling = 1.0 + u_distortion_k1 * r2 + u_distortion_k2 * r2 * r2;
+    return center + rel * scaling;
+}
+
+vec4 sample_denoised(vec2 uv) {
+    if (u_denoise_luminance <= 0.0 && u_denoise_color <= 0.0) {
+        return sample_bicubic(uv);
+    }
+    
+    vec2 tex_size = u_src_size;
+    vec2 step = 1.0 / tex_size;
+    
+    vec4 center_col = sample_bicubic(uv);
+    vec3 center_yuv = rgb_to_yuv(center_col.rgb);
+    
+    float final_y = 0.0;
+    float final_u = 0.0;
+    float final_v = 0.0;
+    float weight_total_y = 0.0;
+    float weight_total_c = 0.0;
+    
+    float sigma_s = 2.0;
+    float sigma_r = max(0.001, u_denoise_luminance * 0.4);
+    
+    for (int i = -2; i <= 2; i++) {
+        for (int j = -2; j <= 2; j++) {
+            vec2 offset = vec2(float(i), float(j)) * step;
+            vec2 sample_uv = clamp(uv + offset, vec2(0.0), vec2(1.0));
+            
+            vec4 col = texture(u_texture, sample_uv);
+            vec3 yuv = rgb_to_yuv(col.rgb);
+            
+            float dist_sq = float(i*i + j*j);
+            float w_spatial = exp(-dist_sq / (2.0 * sigma_s * sigma_s));
+            
+            float diff_y = abs(yuv.x - center_yuv.x);
+            float w_range = exp(-(diff_y * diff_y) / (2.0 * sigma_r * sigma_r));
+            float w_y = w_spatial * w_range;
+            
+            if (u_denoise_luminance > 0.0) {
+                final_y += yuv.x * w_y;
+                weight_total_y += w_y;
+            }
+            
+            if (u_denoise_color > 0.0) {
+                final_u += yuv.y * w_spatial;
+                final_v += yuv.z * w_spatial;
+                weight_total_c += w_spatial;
+            }
+        }
+    }
+    
+    float out_y = center_yuv.x;
+    float out_u = center_yuv.y;
+    float out_v = center_yuv.z;
+    
+    if (u_denoise_luminance > 0.0 && weight_total_y > 0.0) {
+        out_y = final_y / weight_total_y;
+    }
+    
+    if (u_denoise_color > 0.0 && weight_total_c > 0.0) {
+        out_u = final_u / weight_total_c;
+        out_v = final_v / weight_total_c;
+    }
+    
+    return vec4(yuv_to_rgb(vec3(out_y, out_u, out_v)), center_col.a);
+}
+
 void main() {
     vec2 uv = v_uv;
     
     // 1. Geometry (Warp)
-    float v = clamp(u_geo_vertical, -1.0, 1.0);
-    float h = clamp(u_geo_horizontal, -1.0, 1.0);
-    
-    if (abs(v) > 0.0001 || abs(h) > 0.0001) {
-        float max_x_offset = 0.25;
-        float max_y_offset = 0.25;
-        
-        float top_inset = v * max_x_offset;
-        float bottom_inset = -v * max_x_offset;
-        float left_y = h * max_y_offset;
-        float right_y = -h * max_y_offset;
-        
-        vec2 ul = vec2(0.0 + top_inset, 0.0 + left_y);
-        vec2 ll = vec2(0.0 + bottom_inset, 1.0 - left_y);
-        vec2 lr = vec2(1.0 - bottom_inset, 1.0 - right_y);
-        vec2 ur = vec2(1.0 - top_inset, 0.0 + right_y);
-        
-        vec2 top = mix(ul, ur, uv.x);
-        vec2 bottom = mix(ll, lr, uv.x);
-        uv = mix(top, bottom, uv.y);
+    vec3 src_h = u_homography_matrix * vec3(uv, 1.0);
+    if (abs(src_h.z) > 0.00001) {
+        uv = src_h.xy / src_h.z;
+    }
+
+    // Apply Flips
+    if (u_flip_horizontal > 0.5) {
+        uv.x = 1.0 - uv.x;
+    }
+    if (u_flip_vertical > 0.5) {
+        uv.y = 1.0 - uv.y;
     }
     
     // 2. Crop / Rotate
@@ -484,12 +897,18 @@ void main() {
         }
     }
     
+
+    
+    // Distort UV
+    uv = distort_uv(uv);
+
+    // Check bounds after distortion
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         out_color = vec4(0.0);
         return;
     }
-    
-    vec4 color = sample_bicubic(uv);
+
+    vec4 color = sample_denoised(uv);
     
     // 3. Exposure
     float exposure_factor = pow(2.0, u_exposure);
@@ -517,7 +936,95 @@ void main() {
         color.b *= temp_b * tint_rb;
     }
     
-    // 5. Grain
+    // 5. Curves
+    vec3 curved_col;
+    curved_col.r = texture(u_curves, vec2(color.r, 0.5)).r;
+    curved_col.g = texture(u_curves, vec2(color.g, 0.5)).g;
+    curved_col.b = texture(u_curves, vec2(color.b, 0.5)).b;
+    color.rgb = mix(color.rgb, curved_col, u_curves_intensity);
+
+    // 5.2 HSL Tuning
+    // 5.2 HSL Tuning
+    if (u_hsl_enabled > 0.5) {
+        vec3 hsl = rgb_to_hsl(color.rgb);
+        vec3 dHSL = vec3(0.0);
+        
+        for (int i = 0; i < 8; i++) {
+            float center = u_hsl[i].w;
+            float dist = abs(hsl.x - center);
+            if (dist > 0.5) dist = 1.0 - dist;
+            
+            float width = 60.0 / 360.0;
+            if (dist < width) {
+                float t = dist / width;
+                float weight = 1.0 - t * t * (3.0 - 2.0 * t);
+                dHSL += u_hsl[i].xyz * weight;
+            }
+        }
+        
+        hsl.x = mod(hsl.x + dHSL.x * (30.0 / 360.0), 1.0);
+        hsl.y = clamp(hsl.y + dHSL.y, 0.0, 1.0);
+        hsl.z = clamp(hsl.z + dHSL.z, 0.0, 1.0);
+        color.rgb = hsl_to_rgb(hsl);
+    }
+
+    // 5.3 Split Toning
+    if (u_st_shadow_sat > 0.0 || u_st_highlight_sat > 0.0) {
+        float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+        float mid = 0.5 + u_st_balance * 0.5;
+        vec3 shadow_rgb = hsl_to_rgb(vec3(u_st_shadow_hue / 360.0, u_st_shadow_sat, 0.5));
+        vec3 highlight_rgb = hsl_to_rgb(vec3(u_st_highlight_hue / 360.0, u_st_highlight_sat, 0.5));
+        
+        float h_mask = clamp((lum - mid) / max(0.01, 1.0 - mid), 0.0, 1.0);
+        float s_mask = 1.0 - clamp(lum / max(0.01, mid), 0.0, 1.0);
+
+        vec3 final_rgb = color.rgb;
+        
+        // Shadow pass
+        if (u_st_shadow_sat > 0.0) {
+            for (int i = 0; i < 3; i++) {
+                float base = final_rgb[i];
+                float blend = shadow_rgb[i];
+                float res;
+                if (blend < 0.5) {
+                    res = base - (1.0 - 2.0 * blend) * base * (1.0 - base);
+                } else {
+                    float v;
+                    if (base <= 0.25) { v = ((16.0 * base - 12.0) * base + 4.0) * base; }
+                    else { v = sqrt(base); }
+                    res = base + (2.0 * blend - 1.0) * (v - base);
+                }
+                final_rgb[i] = mix(base, res, s_mask);
+            }
+        }
+        
+        // Highlight pass
+        if (u_st_highlight_sat > 0.0) {
+            for (int i = 0; i < 3; i++) {
+                float base = final_rgb[i];
+                float blend = highlight_rgb[i];
+                float res;
+                if (blend < 0.5) {
+                    res = base - (1.0 - 2.0 * blend) * base * (1.0 - base);
+                } else {
+                    float v;
+                    if (base <= 0.25) { v = ((16.0 * base - 12.0) * base + 4.0) * base; }
+                    else { v = sqrt(base); }
+                    res = base + (2.0 * blend - 1.0) * (v - base);
+                }
+                final_rgb[i] = mix(base, res, h_mask);
+            }
+        }
+        color.rgb = final_rgb;
+    }
+
+    // 5.5 LUT 
+    if (u_lut_intensity > 0.0) {
+        vec3 lut_col = texture(u_lut, color.rgb).rgb;
+        color.rgb = mix(color.rgb, lut_col, u_lut_intensity);
+    }
+    
+    // 6. Grain
     if (u_grain_amount > 0.0) {
         float grain_scale = max(1.0, u_grain_size);
         vec2 grain_uv = (v_uv * u_src_size) / grain_scale; // Use v_uv (screen space) or uv (image space)?

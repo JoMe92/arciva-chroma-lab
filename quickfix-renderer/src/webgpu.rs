@@ -11,8 +11,10 @@ use wgpu::util::DeviceExt;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct SettingsUniform {
-    geo_vertical: f32,
-    geo_horizontal: f32,
+    homography_matrix: [[f32; 4]; 3], // 48 bytes (3 vec3s aligned to vec4)
+    geo_padding: f32,                 // 4 bytes
+    flip_vertical: f32,
+    flip_horizontal: f32,
     crop_rotation: f32,
     crop_aspect: f32,
     exposure: f32,
@@ -25,7 +27,21 @@ struct SettingsUniform {
     grain_size: f32,
     src_width: f32,
     src_height: f32,
-    _padding: [f32; 2], // Pad to 16 bytes alignment (14 floats = 56 bytes. 64 bytes is 16 floats. Need 2 more.)
+    lut_intensity: f32,
+    denoise_luminance: f32,
+    denoise_color: f32,
+    curves_intensity: f32,
+    st_shadow_hue: f32,
+    st_shadow_sat: f32,
+    st_highlight_hue: f32,
+    st_highlight_sat: f32,
+    st_balance: f32,
+    /// Padding to match WGSL alignment (144 bytes used + 1 padding + 2 distortion + 1 align = 160)
+    _padding: f32,
+    distortion_k1: f32,
+    distortion_k2: f32,
+    hsl_enabled: f32,
+    hsl: [[f32; 4]; 8],
 }
 
 pub struct WebGpuRenderer {
@@ -37,6 +53,13 @@ pub struct WebGpuRenderer {
     bind_group_layout: Option<wgpu::BindGroupLayout>,
     grain_texture: Option<wgpu::Texture>,
     grain_sampler: Option<wgpu::Sampler>,
+    lut_texture: Option<wgpu::Texture>,
+    lut_sampler: Option<wgpu::Sampler>,
+    default_lut_texture: Option<wgpu::Texture>,
+    curves_sampler: Option<wgpu::Sampler>,
+
+    // Cache
+    source_textures: std::collections::HashMap<String, wgpu::Texture>,
 }
 
 impl Default for WebGpuRenderer {
@@ -56,6 +79,11 @@ impl WebGpuRenderer {
             bind_group_layout: None,
             grain_texture: None,
             grain_sampler: None,
+            lut_texture: None,
+            lut_sampler: None,
+            default_lut_texture: None,
+            curves_sampler: None,
+            source_textures: std::collections::HashMap::new(),
         }
     }
 
@@ -137,6 +165,42 @@ impl WebGpuRenderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // LUT Texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // LUT Sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // Curves Texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Curves Sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
 
@@ -179,16 +243,9 @@ impl WebGpuRenderer {
         // Create Grain Texture (Pre-seeded noise)
         // 256x256 noise texture
         let grain_size = 256;
-        let mut rng = rand::thread_rng(); // Or seeded if we want deterministic across sessions, but implementation plan said "pre-generated".
-                                          // Actually, we should use the same seed logic as CPU if we want exact parity, but for grain texture we just need a good noise source.
-                                          // The implementation plan said "Grain noise will be pre-generated on the CPU ... and uploaded".
-                                          // Let's generate it here.
+        let mut rng = rand::thread_rng();
         use rand_distr::{Distribution, Normal};
-        let normal = Normal::new(0.5, 0.15).unwrap(); // Mean 0.5, sigma 0.15 (so +/- 3 sigma fits in 0..1 roughly)
-                                                      // Wait, shader expects (val - 0.5) * 2.0 to get -1..1.
-                                                      // So we want 0.5 + N(0, 1) * scale?
-                                                      // Let's just generate uniform random for now? No, grain looks better with Gaussian.
-                                                      // Let's generate Gaussian centered at 0.5.
+        let normal = Normal::new(0.5, 0.15).unwrap();
 
         let mut grain_data = Vec::with_capacity(grain_size * grain_size * 4);
         for _ in 0..(grain_size * grain_size) {
@@ -228,13 +285,60 @@ impl WebGpuRenderer {
             ..Default::default()
         });
 
+        // Default LUT (Identity 2x2x2 or just 1x1x1?)
+        // 1x1x1 is fine if we don't sample it (intensity 0)
+        let default_lut_size = 1;
+        let default_lut_data = [0, 0, 0, 255]; // Black
+        let default_lut_texture = device.create_texture_with_data(
+            &queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Default LUT"),
+                size: wgpu::Extent3d {
+                    width: default_lut_size,
+                    height: default_lut_size,
+                    depth_or_array_layers: default_lut_size,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D3,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &default_lut_data,
+        );
+
+        let lut_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("LUT Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         self.adapter = Some(adapter);
-        self.device = Some(device);
         self.queue = Some(queue);
         self.pipeline = Some(pipeline);
         self.bind_group_layout = Some(bind_group_layout);
         self.grain_texture = Some(grain_texture);
         self.grain_sampler = Some(grain_sampler);
+        self.default_lut_texture = Some(default_lut_texture);
+        self.lut_sampler = Some(lut_sampler);
+
+        // Curves Sampler
+        let curves_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Curves Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        self.curves_sampler = Some(curves_sampler);
+        self.device = Some(device);
 
         Ok(())
     }
@@ -246,39 +350,120 @@ impl Renderer for WebGpuRenderer {
         self.ensure_initialized().await
     }
 
+    async fn set_lut(
+        &mut self,
+        _id: Option<&str>,
+        data: &[f32],
+        size: u32,
+    ) -> Result<(), RendererError> {
+        self.ensure_initialized().await?;
+        let device = self.device.as_ref().unwrap();
+        let queue = self.queue.as_ref().unwrap();
+
+        // Convert f32 RGB to u8 RGBA
+        // Data is size*size*size * 3 floats.
+        // We need size*size*size * 4 bytes.
+        let num_pixels = (size * size * size) as usize;
+        let mut texture_data = Vec::with_capacity(num_pixels * 4);
+
+        for chunk in data.chunks(3) {
+            let r = (chunk[0].clamp(0.0, 1.0) * 255.0) as u8;
+            let g = (chunk[1].clamp(0.0, 1.0) * 255.0) as u8;
+            let b = (chunk[2].clamp(0.0, 1.0) * 255.0) as u8;
+            texture_data.extend_from_slice(&[r, g, b, 255]);
+        }
+
+        let texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("LUT Texture"),
+                size: wgpu::Extent3d {
+                    width: size,
+                    height: size,
+                    depth_or_array_layers: size,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D3,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &texture_data,
+        );
+
+        self.lut_texture = Some(texture);
+        Ok(())
+    }
+
     async fn render(
         &mut self,
         data: &[u8],
         width: u32,
         height: u32,
         settings: &QuickFixAdjustments,
-    ) -> Result<Vec<u8>, RendererError> {
+        _source_id: Option<&str>,
+    ) -> Result<(Vec<u8>, Vec<u32>), RendererError> {
         self.ensure_initialized().await?;
         let device = self.device.as_ref().unwrap();
         let queue = self.queue.as_ref().unwrap();
         let pipeline = self.pipeline.as_ref().unwrap();
         let bind_group_layout = self.bind_group_layout.as_ref().unwrap();
 
-        // Upload Source Texture
-        let src_texture = device.create_texture_with_data(
-            queue,
-            &wgpu::TextureDescriptor {
-                label: Some("Source Texture"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
+        // Upload Source Texture or Reuse Cached
+        // We need an owned Option to hold the transient texture if created
+        let transient_texture;
+
+        // Decide which texture to use
+        let src_texture = if let Some(id) = _source_id {
+            if !self.source_textures.contains_key(id) {
+                let tex = device.create_texture_with_data(
+                    queue,
+                    &wgpu::TextureDescriptor {
+                        label: Some(&format!("Source Texture {}", id)),
+                        size: wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    },
+                    wgpu::util::TextureDataOrder::LayerMajor,
+                    data,
+                );
+                self.source_textures.insert(id.to_string(), tex);
+            }
+            // Now retrieve reference
+            self.source_textures.get(id).unwrap()
+        } else {
+            // Create transient
+            transient_texture = device.create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: Some("Source Texture"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
                 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            },
-            wgpu::util::TextureDataOrder::LayerMajor,
-            data,
-        );
+                wgpu::util::TextureDataOrder::LayerMajor,
+                data,
+            );
+            &transient_texture
+        };
 
         let src_view = src_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let src_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -306,17 +491,50 @@ impl Renderer for WebGpuRenderer {
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Uniforms
+        // Calculate Homography
+        let vertical = settings
+            .geometry
+            .as_ref()
+            .and_then(|g| g.vertical)
+            .unwrap_or(0.0);
+        let horizontal = settings
+            .geometry
+            .as_ref()
+            .and_then(|g| g.horizontal)
+            .unwrap_or(0.0);
+        let corners = crate::geometry::calculate_distortion_state(vertical, horizontal);
+        let h = crate::geometry::calculate_homography_from_unit_square(&corners); // [f32; 9]
+
+        // Pack into 3 vec4s for std140 layout
+        let mat = [
+            [h[0], h[1], h[2], 0.0],
+            [h[3], h[4], h[5], 0.0],
+            [h[6], h[7], h[8], 0.0],
+        ];
+
         let uniforms = SettingsUniform {
-            geo_vertical: settings
+            homography_matrix: mat,
+            geo_padding: 0.0,
+            flip_vertical: if settings
                 .geometry
                 .as_ref()
-                .and_then(|g| g.vertical)
-                .unwrap_or(0.0),
-            geo_horizontal: settings
+                .and_then(|g| g.flip_vertical)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
+            flip_horizontal: if settings
                 .geometry
                 .as_ref()
-                .and_then(|g| g.horizontal)
-                .unwrap_or(0.0),
+                .and_then(|g| g.flip_horizontal)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
             crop_rotation: settings
                 .crop
                 .as_ref()
@@ -362,7 +580,84 @@ impl Renderer for WebGpuRenderer {
             },
             src_width: width as f32,
             src_height: height as f32,
-            _padding: [0.0; 2],
+            lut_intensity: if self.lut_texture.is_some() {
+                settings.lut.as_ref().map(|l| l.intensity).unwrap_or(0.0)
+            } else {
+                0.0
+            },
+            denoise_luminance: settings
+                .denoise
+                .as_ref()
+                .map(|d| d.luminance)
+                .unwrap_or(0.0),
+            denoise_color: settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
+            curves_intensity: settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
+            // _padding: 0.0, // Removed duplicate
+            st_shadow_hue: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.shadow_hue / 360.0)
+                .unwrap_or(0.0),
+            st_shadow_sat: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.shadow_sat)
+                .unwrap_or(0.0),
+            st_highlight_hue: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.highlight_hue / 360.0)
+                .unwrap_or(0.0),
+            st_highlight_sat: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.highlight_sat)
+                .unwrap_or(0.0),
+            st_balance: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.balance)
+                .unwrap_or(0.0),
+            _padding: 0.0,
+            distortion_k1: settings.distortion.as_ref().map(|d| d.k1).unwrap_or(0.0),
+            distortion_k2: settings.distortion.as_ref().map(|d| d.k2).unwrap_or(0.0),
+            hsl_enabled: if settings.hsl.is_some() { 1.0 } else { 0.0 },
+            hsl: {
+                let mut hsl_data = [[0.0f32; 4]; 8];
+                let centers = [
+                    0.0 / 360.0,
+                    30.0 / 360.0,
+                    60.0 / 360.0,
+                    120.0 / 360.0,
+                    180.0 / 360.0,
+                    240.0 / 360.0,
+                    270.0 / 360.0,
+                    300.0 / 360.0,
+                ];
+                if let Some(hsl) = &settings.hsl {
+                    let ranges = [
+                        &hsl.red,
+                        &hsl.orange,
+                        &hsl.yellow,
+                        &hsl.green,
+                        &hsl.aqua,
+                        &hsl.blue,
+                        &hsl.purple,
+                        &hsl.magenta,
+                    ];
+                    for i in 0..8 {
+                        hsl_data[i][0] = ranges[i].hue;
+                        hsl_data[i][1] = ranges[i].saturation;
+                        hsl_data[i][2] = ranges[i].luminance;
+                        hsl_data[i][3] = centers[i];
+                    }
+                } else {
+                    for i in 0..8 {
+                        hsl_data[i][3] = centers[i];
+                    }
+                }
+                hsl_data
+            },
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -372,6 +667,105 @@ impl Renderer for WebGpuRenderer {
         });
 
         // Bind Group
+        let lut_view = self
+            .lut_texture
+            .as_ref()
+            .or(self.default_lut_texture.as_ref())
+            .unwrap()
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Curves LUT Update
+        let combined_data = if let Some(curves) = &settings.curves {
+            let master = crate::operations::generate_curve_lut(
+                &curves
+                    .master
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let red = crate::operations::generate_curve_lut(
+                &curves
+                    .red
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let green = crate::operations::generate_curve_lut(
+                &curves
+                    .green
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let blue = crate::operations::generate_curve_lut(
+                &curves
+                    .blue
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+
+            let mut combined = Vec::with_capacity(256 * 4);
+            for &m in &master {
+                let rx = (m * 255.0).clamp(0.0, 255.0);
+                let ri = rx.floor() as usize;
+                let rf = rx - ri as f32;
+
+                let r = if ri >= 255 {
+                    red[255]
+                } else {
+                    red[ri] * (1.0 - rf) + red[ri + 1] * rf
+                };
+                let g = if ri >= 255 {
+                    green[255]
+                } else {
+                    green[ri] * (1.0 - rf) + green[ri + 1] * rf
+                };
+                let b = if ri >= 255 {
+                    blue[255]
+                } else {
+                    blue[ri] * (1.0 - rf) + blue[ri + 1] * rf
+                };
+
+                combined.push(r);
+                combined.push(g);
+                combined.push(b);
+                combined.push(1.0); // Alpha
+            }
+            combined
+        } else {
+            let mut identity = Vec::with_capacity(256 * 4);
+            for i in 0..256 {
+                let v = i as f32 / 255.0;
+                identity.push(v);
+                identity.push(v);
+                identity.push(v);
+                identity.push(1.0);
+            }
+            identity
+        };
+
+        let curves_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Curves Texture"),
+                size: wgpu::Extent3d {
+                    width: 256,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            bytemuck::cast_slice(&combined_data),
+        );
+        let curves_view = curves_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Bind Group"),
             layout: bind_group_layout,
@@ -401,6 +795,22 @@ impl Renderer for WebGpuRenderer {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(self.grain_sampler.as_ref().unwrap()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&lut_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(self.lut_sampler.as_ref().unwrap()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&curves_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::Sampler(self.curves_sampler.as_ref().unwrap()),
                 },
             ],
         });
@@ -479,7 +889,8 @@ impl Renderer for WebGpuRenderer {
         let data = buffer_slice.get_mapped_range().to_vec();
         output_buffer.unmap();
 
-        Ok(data)
+        let histogram = crate::operations::compute_histogram(&data);
+        Ok((data, histogram))
     }
 
     async fn render_to_canvas(
@@ -489,6 +900,7 @@ impl Renderer for WebGpuRenderer {
         height: u32,
         settings: &QuickFixAdjustments,
         canvas: &web_sys::HtmlCanvasElement,
+        _source_id: Option<&str>,
     ) -> Result<(), RendererError> {
         self.ensure_initialized().await?;
 
@@ -599,17 +1011,53 @@ impl Renderer for WebGpuRenderer {
         });
 
         // Uniforms (same as render)
+        // Calculate Homography
+        let vertical = settings
+            .geometry
+            .as_ref()
+            .and_then(|g| g.vertical)
+            .unwrap_or(0.0);
+        let horizontal = settings
+            .geometry
+            .as_ref()
+            .and_then(|g| g.horizontal)
+            .unwrap_or(0.0);
+        let corners = crate::geometry::calculate_distortion_state(vertical, horizontal);
+        let h = crate::geometry::calculate_homography_from_unit_square(&corners); // [f32; 9]
+
+        // Pack into 3 vec4s for std140 layout
+        // Col 0: h[0], h[1], h[2], pad
+        // Col 1: h[3], h[4], h[5], pad
+        // Col 2: h[6], h[7], h[8], pad
+        let mat = [
+            [h[0], h[1], h[2], 0.0],
+            [h[3], h[4], h[5], 0.0],
+            [h[6], h[7], h[8], 0.0],
+        ];
+
         let uniforms = SettingsUniform {
-            geo_vertical: settings
+            homography_matrix: mat,
+            geo_padding: 0.0,
+            flip_vertical: if settings
                 .geometry
                 .as_ref()
-                .and_then(|g| g.vertical)
-                .unwrap_or(0.0),
-            geo_horizontal: settings
+                .and_then(|g| g.flip_vertical)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
+            flip_horizontal: if settings
                 .geometry
                 .as_ref()
-                .and_then(|g| g.horizontal)
-                .unwrap_or(0.0),
+                .and_then(|g| g.flip_horizontal)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
             crop_rotation: settings
                 .crop
                 .as_ref()
@@ -655,7 +1103,81 @@ impl Renderer for WebGpuRenderer {
             },
             src_width: width as f32,
             src_height: height as f32,
-            _padding: [0.0; 2],
+            lut_intensity: settings.lut.as_ref().map(|l| l.intensity).unwrap_or(0.0),
+            denoise_luminance: settings
+                .denoise
+                .as_ref()
+                .map(|d| d.luminance)
+                .unwrap_or(0.0),
+            denoise_color: settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
+            curves_intensity: settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
+            // _padding: 0.0, // Removed duplicate
+            st_shadow_hue: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.shadow_hue / 360.0)
+                .unwrap_or(0.0),
+            st_shadow_sat: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.shadow_sat)
+                .unwrap_or(0.0),
+            st_highlight_hue: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.highlight_hue / 360.0)
+                .unwrap_or(0.0),
+            st_highlight_sat: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.highlight_sat)
+                .unwrap_or(0.0),
+            st_balance: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.balance)
+                .unwrap_or(0.0),
+            _padding: 0.0,
+            distortion_k1: settings.distortion.as_ref().map(|d| d.k1).unwrap_or(0.0),
+            distortion_k2: settings.distortion.as_ref().map(|d| d.k2).unwrap_or(0.0),
+            hsl_enabled: if settings.hsl.is_some() { 1.0 } else { 0.0 },
+
+            hsl: {
+                let mut hsl_data = [[0.0f32; 4]; 8];
+                let centers = [
+                    0.0 / 360.0,
+                    30.0 / 360.0,
+                    60.0 / 360.0,
+                    120.0 / 360.0,
+                    180.0 / 360.0,
+                    240.0 / 360.0,
+                    270.0 / 360.0,
+                    300.0 / 360.0,
+                ];
+                if let Some(hsl) = &settings.hsl {
+                    let ranges = [
+                        &hsl.red,
+                        &hsl.orange,
+                        &hsl.yellow,
+                        &hsl.green,
+                        &hsl.aqua,
+                        &hsl.blue,
+                        &hsl.purple,
+                        &hsl.magenta,
+                    ];
+                    for i in 0..8 {
+                        hsl_data[i][0] = ranges[i].hue;
+                        hsl_data[i][1] = ranges[i].saturation;
+                        hsl_data[i][2] = ranges[i].luminance;
+                        hsl_data[i][3] = centers[i];
+                    }
+                } else {
+                    for i in 0..8 {
+                        hsl_data[i][3] = centers[i];
+                    }
+                }
+                hsl_data
+            },
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -665,6 +1187,105 @@ impl Renderer for WebGpuRenderer {
         });
 
         // Bind Group
+        let lut_view = self
+            .lut_texture
+            .as_ref()
+            .or(self.default_lut_texture.as_ref())
+            .unwrap()
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Curves LUT Update
+        let combined_data = if let Some(curves) = &settings.curves {
+            let master = crate::operations::generate_curve_lut(
+                &curves
+                    .master
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let red = crate::operations::generate_curve_lut(
+                &curves
+                    .red
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let green = crate::operations::generate_curve_lut(
+                &curves
+                    .green
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let blue = crate::operations::generate_curve_lut(
+                &curves
+                    .blue
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+
+            let mut combined = Vec::with_capacity(256 * 4);
+            for &m in &master {
+                let rx = (m * 255.0).clamp(0.0, 255.0);
+                let ri = rx.floor() as usize;
+                let rf = rx - ri as f32;
+
+                let r = if ri >= 255 {
+                    red[255]
+                } else {
+                    red[ri] * (1.0 - rf) + red[ri + 1] * rf
+                };
+                let g = if ri >= 255 {
+                    green[255]
+                } else {
+                    green[ri] * (1.0 - rf) + green[ri + 1] * rf
+                };
+                let b = if ri >= 255 {
+                    blue[255]
+                } else {
+                    blue[ri] * (1.0 - rf) + blue[ri + 1] * rf
+                };
+
+                combined.push(r);
+                combined.push(g);
+                combined.push(b);
+                combined.push(1.0); // Alpha
+            }
+            combined
+        } else {
+            let mut identity = Vec::with_capacity(256 * 4);
+            for i in 0..256 {
+                let v = i as f32 / 255.0;
+                identity.push(v);
+                identity.push(v);
+                identity.push(v);
+                identity.push(1.0);
+            }
+            identity
+        };
+
+        let curves_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Curves Texture"),
+                size: wgpu::Extent3d {
+                    width: 256,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            bytemuck::cast_slice(&combined_data),
+        );
+        let curves_view = curves_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Bind Group"),
             layout: bind_group_layout,
@@ -694,6 +1315,22 @@ impl Renderer for WebGpuRenderer {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(self.grain_sampler.as_ref().unwrap()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&lut_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(self.lut_sampler.as_ref().unwrap()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&curves_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::Sampler(self.curves_sampler.as_ref().unwrap()),
                 },
             ],
         });

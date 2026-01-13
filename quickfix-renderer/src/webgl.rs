@@ -14,6 +14,12 @@ pub struct WebGlRenderer {
     vao: Option<glow::VertexArray>,
     texture: Option<glow::Texture>,
     grain_texture: Option<glow::Texture>,
+    lut_texture: Option<glow::Texture>,
+    curves_texture: Option<glow::Texture>,
+
+    lut_cache: Option<(Vec<f32>, u32)>,
+    lut_dirty: bool,
+    curves_dirty: bool,
 
     canvas: Option<CanvasBackend>, // Keep reference if we created context from it
 }
@@ -77,6 +83,11 @@ impl WebGlRenderer {
             vao: None,
             texture: None,
             grain_texture: None,
+            lut_texture: None,
+            curves_texture: None,
+            lut_cache: None,
+            lut_dirty: false,
+            curves_dirty: false,
             canvas: None,
         }
     }
@@ -100,6 +111,10 @@ impl WebGlRenderer {
                     self.vao = None;
                     self.texture = None;
                     self.grain_texture = None;
+                    self.lut_texture = None;
+                    // Keep cache and mark dirty to re-upload
+                    self.lut_dirty = true;
+                    self.curves_dirty = true;
                     self.canvas = None;
                 }
             } else {
@@ -109,6 +124,9 @@ impl WebGlRenderer {
                 self.vao = None;
                 self.texture = None;
                 self.grain_texture = None;
+                self.lut_texture = None;
+                self.lut_dirty = true;
+                self.curves_dirty = true;
                 self.canvas = None;
             }
         }
@@ -304,11 +322,69 @@ impl WebGlRenderer {
                 Some(&grain_data),
             );
 
+            // LUT Texture
+            let lut_texture = gl.create_texture().map_err(RendererError::InitFailed)?;
+            gl.bind_texture(glow::TEXTURE_3D, Some(lut_texture));
+            gl.tex_parameter_i32(
+                glow::TEXTURE_3D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_3D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_3D,
+                glow::TEXTURE_WRAP_R,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_3D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_3D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR as i32,
+            );
+            // Don't upload data here, will do in render if dirty
+            self.lut_dirty = true;
+
+            // Curves Texture (256x1, 3 channels)
+            let curves_texture = gl.create_texture().map_err(RendererError::InitFailed)?;
+            gl.bind_texture(glow::TEXTURE_2D, Some(curves_texture));
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR as i32,
+            );
+            self.curves_dirty = true;
+
             self.context = Some(gl);
             self.program = Some(program);
             self.vao = Some(vao);
             self.texture = Some(texture);
             self.grain_texture = Some(grain_texture);
+            self.lut_texture = Some(lut_texture);
+            self.curves_texture = Some(curves_texture);
         }
 
         Ok(())
@@ -346,27 +422,187 @@ impl WebGlRenderer {
         gl.active_texture(glow::TEXTURE1);
         gl.bind_texture(glow::TEXTURE_2D, self.grain_texture);
 
+        // Bind LUT texture and upload if dirty
+        gl.active_texture(glow::TEXTURE2);
+        gl.bind_texture(glow::TEXTURE_3D, self.lut_texture);
+
+        if self.lut_dirty {
+            if let Some((data, size)) = &self.lut_cache {
+                // Upload data
+                // tex_image_3d(target, level, internalformat, width, height, depth, border, format, type, pixels)
+                gl.tex_image_3d(
+                    glow::TEXTURE_3D,
+                    0,
+                    glow::RGB32F as i32, // Float texture
+                    *size as i32,
+                    *size as i32,
+                    *size as i32,
+                    0,
+                    glow::RGB,
+                    glow::FLOAT,
+                    Some(bytemuck::cast_slice(data)),
+                );
+            } else {
+                // Upload placeholder 1x1x1 white
+                let placeholder = [1.0f32, 1.0, 1.0];
+                gl.tex_image_3d(
+                    glow::TEXTURE_3D,
+                    0,
+                    glow::RGB32F as i32,
+                    1,
+                    1,
+                    1,
+                    0,
+                    glow::RGB,
+                    glow::FLOAT,
+                    Some(bytemuck::cast_slice(&placeholder)),
+                );
+            }
+            self.lut_dirty = false;
+        }
+
+        // Curves LUT
+        gl.active_texture(glow::TEXTURE3);
+        gl.bind_texture(glow::TEXTURE_2D, self.curves_texture);
+        if let Some(curves) = &settings.curves {
+            // Generate combined curves LUT
+            let master = crate::operations::generate_curve_lut(
+                &curves
+                    .master
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let red = crate::operations::generate_curve_lut(
+                &curves
+                    .red
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let green = crate::operations::generate_curve_lut(
+                &curves
+                    .green
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+            let blue = crate::operations::generate_curve_lut(
+                &curves
+                    .blue
+                    .as_ref()
+                    .map(|c| c.points.clone())
+                    .unwrap_or_default(),
+            );
+
+            let mut combined_data = Vec::with_capacity(256 * 3);
+            for &m in &master {
+                let rx = (m * 255.0).clamp(0.0, 255.0);
+                let ri = rx.floor() as usize;
+                let rf = rx - ri as f32;
+
+                let r = if ri >= 255 {
+                    red[255]
+                } else {
+                    red[ri] * (1.0 - rf) + red[ri + 1] * rf
+                };
+                let g = if ri >= 255 {
+                    green[255]
+                } else {
+                    green[ri] * (1.0 - rf) + green[ri + 1] * rf
+                };
+                let b = if ri >= 255 {
+                    blue[255]
+                } else {
+                    blue[ri] * (1.0 - rf) + blue[ri + 1] * rf
+                };
+
+                combined_data.push(r);
+                combined_data.push(g);
+                combined_data.push(b);
+            }
+
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGB32F as i32,
+                256,
+                1,
+                0,
+                glow::RGB,
+                glow::FLOAT,
+                Some(bytemuck::cast_slice(&combined_data)),
+            );
+        } else {
+            // Identity LUT
+            let mut identity = Vec::with_capacity(256 * 3);
+            for i in 0..256 {
+                let v = i as f32 / 255.0;
+                identity.push(v);
+                identity.push(v);
+                identity.push(v);
+            }
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGB32F as i32,
+                256,
+                1,
+                0,
+                glow::RGB,
+                glow::FLOAT,
+                Some(bytemuck::cast_slice(&identity)),
+            );
+        }
+
         // Uniforms
         let loc = |name| gl.get_uniform_location(program, name);
 
         gl.uniform_1_i32(loc("u_texture").as_ref(), 0);
         gl.uniform_1_i32(loc("u_grain").as_ref(), 1);
+        gl.uniform_1_i32(loc("u_lut").as_ref(), 2);
+        gl.uniform_1_i32(loc("u_curves").as_ref(), 3);
 
+        let vertical = settings
+            .geometry
+            .as_ref()
+            .and_then(|g| g.vertical)
+            .unwrap_or(0.0);
+        let horizontal = settings
+            .geometry
+            .as_ref()
+            .and_then(|g| g.horizontal)
+            .unwrap_or(0.0);
+
+        let corners = crate::geometry::calculate_distortion_state(vertical, horizontal);
+        let matrix = crate::geometry::calculate_homography_from_unit_square(&corners);
+
+        gl.uniform_matrix_3_f32_slice(loc("u_homography_matrix").as_ref(), false, &matrix);
         gl.uniform_1_f32(
-            loc("u_geo_vertical").as_ref(),
-            settings
+            loc("u_flip_vertical").as_ref(),
+            if settings
                 .geometry
                 .as_ref()
-                .and_then(|g| g.vertical)
-                .unwrap_or(0.0),
+                .and_then(|g| g.flip_vertical)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
         );
         gl.uniform_1_f32(
-            loc("u_geo_horizontal").as_ref(),
-            settings
+            loc("u_flip_horizontal").as_ref(),
+            if settings
                 .geometry
                 .as_ref()
-                .and_then(|g| g.horizontal)
-                .unwrap_or(0.0),
+                .and_then(|g| g.flip_horizontal)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            },
         );
         gl.uniform_1_f32(
             loc("u_crop_rotation").as_ref(),
@@ -433,6 +669,14 @@ impl WebGlRenderer {
             loc("u_grain_amount").as_ref(),
             settings.grain.as_ref().map(|g| g.amount).unwrap_or(0.0),
         );
+        gl.uniform_1_f32(
+            loc("u_lut_intensity").as_ref(),
+            if self.lut_cache.is_some() {
+                settings.lut.as_ref().map(|l| l.intensity).unwrap_or(0.0)
+            } else {
+                0.0
+            },
+        );
 
         let grain_size = match settings.grain.as_ref().map(|g| g.size.as_str()) {
             Some("medium") => 2.0,
@@ -440,6 +684,102 @@ impl WebGlRenderer {
             _ => 1.0,
         };
         gl.uniform_1_f32(loc("u_grain_size").as_ref(), grain_size);
+        gl.uniform_1_f32(
+            loc("u_denoise_luminance").as_ref(),
+            settings
+                .denoise
+                .as_ref()
+                .map(|d| d.luminance)
+                .unwrap_or(0.0),
+        );
+        gl.uniform_1_f32(
+            loc("u_denoise_color").as_ref(),
+            settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
+        );
+        gl.uniform_1_f32(
+            loc("u_curves_intensity").as_ref(),
+            settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
+        );
+
+        gl.uniform_1_f32(
+            loc("u_distortion_k1").as_ref(),
+            settings.distortion.as_ref().map(|d| d.k1).unwrap_or(0.0),
+        );
+        gl.uniform_1_f32(
+            loc("u_distortion_k2").as_ref(),
+            settings.distortion.as_ref().map(|d| d.k2).unwrap_or(0.0),
+        );
+
+        gl.uniform_1_f32(
+            loc("u_hsl_enabled").as_ref(),
+            if settings.hsl.is_some() { 1.0 } else { 0.0 },
+        );
+
+        // HSL
+        if let Some(hsl) = &settings.hsl {
+            let centers = [
+                0.0 / 360.0,
+                30.0 / 360.0,
+                60.0 / 360.0,
+                120.0 / 360.0,
+                180.0 / 360.0,
+                240.0 / 360.0,
+                270.0 / 360.0,
+                300.0 / 360.0,
+            ];
+            let ranges = [
+                &hsl.red,
+                &hsl.orange,
+                &hsl.yellow,
+                &hsl.green,
+                &hsl.aqua,
+                &hsl.blue,
+                &hsl.purple,
+                &hsl.magenta,
+            ];
+
+            let mut hsl_data = [0.0f32; 32];
+            for i in 0..8 {
+                hsl_data[i * 4] = ranges[i].hue;
+                hsl_data[i * 4 + 1] = ranges[i].saturation;
+                hsl_data[i * 4 + 2] = ranges[i].luminance;
+                hsl_data[i * 4 + 3] = centers[i];
+            }
+            gl.uniform_4_f32_slice(loc("u_hsl").as_ref(), &hsl_data);
+        } else {
+            // Identity HSL
+            let mut hsl_data = [0.0f32; 32];
+            let centers = [
+                0.0 / 360.0,
+                30.0 / 360.0,
+                60.0 / 360.0,
+                120.0 / 360.0,
+                180.0 / 360.0,
+                240.0 / 360.0,
+                270.0 / 360.0,
+                300.0 / 360.0,
+            ];
+            for i in 0..8 {
+                hsl_data[i * 4 + 3] = centers[i];
+            }
+            gl.uniform_4_f32_slice(loc("u_hsl").as_ref(), &hsl_data);
+        }
+
+        // Split Toning
+        if let Some(st) = &settings.split_toning {
+            gl.uniform_1_f32(loc("u_st_shadow_hue").as_ref(), st.shadow_hue);
+            gl.uniform_1_f32(loc("u_st_shadow_sat").as_ref(), st.shadow_sat);
+            gl.uniform_1_f32(loc("u_st_highlight_hue").as_ref(), st.highlight_hue);
+            gl.uniform_1_f32(loc("u_st_highlight_sat").as_ref(), st.highlight_sat);
+            gl.uniform_1_f32(loc("u_st_balance").as_ref(), st.balance);
+        } else {
+            gl.uniform_1_f32(loc("u_st_shadow_hue").as_ref(), 0.0);
+            gl.uniform_1_f32(loc("u_st_shadow_sat").as_ref(), 0.0);
+            gl.uniform_1_f32(loc("u_st_highlight_hue").as_ref(), 0.0);
+            gl.uniform_1_f32(loc("u_st_highlight_sat").as_ref(), 0.0);
+            gl.uniform_1_f32(loc("u_st_balance").as_ref(), 0.0);
+        }
+
         gl.uniform_2_f32(loc("u_src_size").as_ref(), width as f32, height as f32);
 
         gl.viewport(0, 0, width as i32, height as i32);
@@ -455,13 +795,26 @@ impl Renderer for WebGlRenderer {
         self.ensure_initialized(None)
     }
 
+    async fn set_lut(
+        &mut self,
+        _id: Option<&str>,
+        data: &[f32],
+        size: u32,
+    ) -> Result<(), RendererError> {
+        // We clone valid data into our cache
+        self.lut_cache = Some((data.to_vec(), size));
+        self.lut_dirty = true;
+        Ok(())
+    }
+
     async fn render(
         &mut self,
         data: &[u8],
         width: u32,
         height: u32,
         settings: &QuickFixAdjustments,
-    ) -> Result<Vec<u8>, RendererError> {
+        _source_id: Option<&str>,
+    ) -> Result<(Vec<u8>, Vec<u32>), RendererError> {
         self.ensure_initialized(None)?;
 
         // Resize canvas if needed
@@ -487,7 +840,8 @@ impl Renderer for WebGlRenderer {
                 glow::PixelPackData::Slice(&mut pixels),
             );
 
-            Ok(pixels)
+            let histogram = crate::operations::compute_histogram(&pixels);
+            Ok((pixels, histogram))
         }
     }
 
@@ -498,6 +852,7 @@ impl Renderer for WebGlRenderer {
         height: u32,
         settings: &QuickFixAdjustments,
         canvas: &HtmlCanvasElement,
+        _source_id: Option<&str>,
     ) -> Result<(), RendererError> {
         // If we are rendering to a specific canvas, we need to initialize with THAT canvas context.
         // But our struct holds one context.
