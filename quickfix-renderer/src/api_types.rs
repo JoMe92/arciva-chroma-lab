@@ -65,7 +65,7 @@ pub struct GrainSettings {
 pub struct ProcessOptions {
     #[wasm_bindgen(skip)]
     pub return_image_bitmap: Option<bool>,
-    
+
     #[wasm_bindgen(skip)]
     pub source_id: Option<String>,
 }

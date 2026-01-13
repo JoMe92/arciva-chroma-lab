@@ -1,7 +1,4 @@
-
 #[cfg(target_arch = "wasm32")]
-use std::arch::wasm32::*;
-
 use crate::{
     ClaritySettings, ColorSettings, CropSettings, CurvesSettings, DehazeSettings, DenoiseSettings,
     ExposureSettings, GeometrySettings, GrainSettings, HslSettings, LensDistortionSettings,
@@ -100,7 +97,7 @@ pub fn process_frame_internal(
     if let Some(hsl) = &adjustments.hsl {
         apply_hsl_in_place(&mut img, hsl);
     }
-    
+
     // Get dimensions for vignette/others
     let (w, h) = img.dimensions();
 
@@ -156,7 +153,7 @@ pub fn final_render_tiled(
     // Distortion: Keeps size.
     // Geometry: Keeps size.
     // Crop: Changes logic based on rotation/crop rect.
-    
+
     // We'll emulate the size calculation logic
     let mut final_w = source_width;
     let mut final_h = source_height;
@@ -164,47 +161,48 @@ pub fn final_render_tiled(
     // Step 2b+c: Crop/Rotate size calculation
     if let Some(crop) = &adjustments.crop {
         if let Some(rot) = crop.rotation {
-             if rot.abs() > 1e-5 {
-                  // Rotation logic in apply_crop_rotate keeps size same! 
-                  // "let mut rotated = RgbaImage::new(w, h);"
-                  // So rotation doesn't change size in this implementation.
-             }
+            if rot.abs() > 1e-5 {
+                // Rotation logic in apply_crop_rotate keeps size same!
+                // "let mut rotated = RgbaImage::new(w, h);"
+                // So rotation doesn't change size in this implementation.
+            }
         }
-        
+
         let (w, h) = (final_w, final_h);
-        
+
         if let Some(rect) = &crop.rect {
-             // Explicit rect
+            // Explicit rect
             let rx = clamp(rect.x, 0.0, 1.0);
             let ry = clamp(rect.y, 0.0, 1.0);
             let rw = clamp(rect.width, 0.0, 1.0 - rx);
             let rh = clamp(rect.height, 0.0, 1.0 - ry);
             if rw > 0.0 && rh > 0.0 {
-                 final_w = max(1, (w as f32 * rw).round() as u32);
-                 final_h = max(1, (h as f32 * rh).round() as u32);
+                final_w = max(1, (w as f32 * rw).round() as u32);
+                final_h = max(1, (h as f32 * rh).round() as u32);
             }
         } else if let Some(ar) = crop.aspect_ratio {
-             if ar > 0.0 {
+            if ar > 0.0 {
                 let current_ratio = w as f32 / h as f32;
                 if (current_ratio - ar).abs() > 1e-3 {
                     if current_ratio > ar {
-                         final_w = (h as f32 * ar).round() as u32;
+                        final_w = (h as f32 * ar).round() as u32;
                     } else {
-                         final_h = (w as f32 / ar).round() as u32;
+                        final_h = (w as f32 / ar).round() as u32;
                     }
                 }
-             }
+            }
         }
     }
 
     // Allocate final buffer
     let mut result_buffer = vec![0u8; (final_w * final_h * 4) as usize];
-    
+
     // Convert source to image for random access
     // Note: This allocation is unavoidable unless we use raw pointers/unsafe heavily for the source.
-    let source_img = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_vec(source_width, source_height, data.to_vec())
-          .ok_or("Invalid source buffer")?;
-          
+    let source_img =
+        ImageBuffer::<Rgba<u8>, Vec<u8>>::from_vec(source_width, source_height, data.to_vec())
+            .ok_or("Invalid source buffer")?;
+
     // Tiling config
     let tile_size: u32 = 512;
     let padding: i32 = 128; // Covers clarity(100) + sharpen(approx)
@@ -213,106 +211,134 @@ pub fn final_render_tiled(
         let v = clamp(geo.vertical.unwrap_or(0.0), -1.0, 1.0);
         let h = clamp(geo.horizontal.unwrap_or(0.0), -1.0, 1.0);
         if v.abs() > 1e-5 || h.abs() > 1e-5 {
-             let corners = crate::geometry::calculate_distortion_state(v, h);
-             Some(crate::geometry::calculate_homography_from_unit_square(&corners))
+            let corners = crate::geometry::calculate_distortion_state(v, h);
+            Some(crate::geometry::calculate_homography_from_unit_square(
+                &corners,
+            ))
         } else {
-             None
+            None
         }
     } else {
         None
     };
-    
+
     // Rotate helpers
     let (cos_a, sin_a, src_cx, src_cy) = if let Some(crop) = &adjustments.crop {
         if let Some(rot) = crop.rotation {
             let angle_rad = -rot.to_radians();
-            (angle_rad.cos(), angle_rad.sin(), source_width as f32 / 2.0, source_height as f32 / 2.0)
+            (
+                angle_rad.cos(),
+                angle_rad.sin(),
+                source_width as f32 / 2.0,
+                source_height as f32 / 2.0,
+            )
         } else {
-            (1.0, 0.0, source_width as f32 / 2.0, source_height as f32 / 2.0)
+            (
+                1.0,
+                0.0,
+                source_width as f32 / 2.0,
+                source_height as f32 / 2.0,
+            )
         }
     } else {
-         (1.0, 0.0, source_width as f32 / 2.0, source_height as f32 / 2.0)
+        (
+            1.0,
+            0.0,
+            source_width as f32 / 2.0,
+            source_height as f32 / 2.0,
+        )
     };
-    
+
     // Calculate crop offset in the "rotated/geometry" space
     let (crop_off_x, crop_off_y) = if let Some(crop) = &adjustments.crop {
-         let w = source_width; 
-         let h = source_height;
-         if let Some(rect) = &crop.rect {
-            ((w as f32 * rect.x).round() as i32, (h as f32 * rect.y).round() as i32)
-         } else if let Some(ar) = crop.aspect_ratio {
-             if ar > 0.0 {
-                 let current_ratio = w as f32 / h as f32;
-                 if (current_ratio - ar).abs() > 1e-3 {
-                      let (nw, nh) = if current_ratio > ar {
-                           ((h as f32 * ar).round() as u32, h)
-                      } else {
-                           (w, (w as f32 / ar).round() as u32)
-                      };
-                      (((w - nw) / 2) as i32, ((h - nh) / 2) as i32)
-                 } else { (0,0) }
-             } else { (0,0) }
-         } else { (0,0) }
-    } else { (0,0) };
+        let w = source_width;
+        let h = source_height;
+        if let Some(rect) = &crop.rect {
+            (
+                (w as f32 * rect.x).round() as i32,
+                (h as f32 * rect.y).round() as i32,
+            )
+        } else if let Some(ar) = crop.aspect_ratio {
+            if ar > 0.0 {
+                let current_ratio = w as f32 / h as f32;
+                if (current_ratio - ar).abs() > 1e-3 {
+                    let (nw, nh) = if current_ratio > ar {
+                        ((h as f32 * ar).round() as u32, h)
+                    } else {
+                        (w, (w as f32 / ar).round() as u32)
+                    };
+                    (((w - nw) / 2) as i32, ((h - nh) / 2) as i32)
+                } else {
+                    (0, 0)
+                }
+            } else {
+                (0, 0)
+            }
+        } else {
+            (0, 0)
+        }
+    } else {
+        (0, 0)
+    };
     // step_by requires usize
     for y in (0..final_h).step_by(tile_size as usize) {
         for x in (0..final_w).step_by(tile_size as usize) {
             let limit_w = std::cmp::min(tile_size, final_w - x);
             let limit_h = std::cmp::min(tile_size, final_h - y);
-            
+
             // Define padded region in Final Image Frame
             let pad_x = x as i32 - padding;
             let pad_y = y as i32 - padding;
             let pad_w = limit_w as i32 + padding * 2;
             let pad_h = limit_h as i32 + padding * 2;
-            
+
             // ...
-            
+
             // We need to iterate this padded region, mapping each pixel back to source
-            // The mapping pipeline: 
+            // The mapping pipeline:
             // Final(px, py) -> Rotated(rx, ry) -> Geometry(gx, gy) -> Distorted(dx, dy) -> Source(sx, sy)
-            
+
             let mut tile_buffer = RgbaImage::new(pad_w as u32, pad_h as u32);
-            
+
             for ty in 0..pad_h {
                 for tx in 0..pad_w {
                     let global_out_x = pad_x + tx;
                     let global_out_y = pad_y + ty;
-                    
+
                     // 1. Map Final -> Rotated (Reverse Crop)
                     // Rotated Space has same origin, just offset by the crop.
                     let r_x = global_out_x + crop_off_x;
                     let r_y = global_out_y + crop_off_y;
-                    
+
                     // 2. Map Rotated -> Geometry Output (Reverse Rotation)
                     // Rotation is around center of image.
                     // Image Size is Source Size.
                     // output coords relative to center:
                     let dx = r_x as f32 - src_cx;
                     let dy = r_y as f32 - src_cy;
-                    
+
                     // Backwards rotation (dest -> src)
                     // src_x = x * cos - y * sin (if mapping dest to source for "Rotate by Theta")
                     // In apply_crop_rotate: src_dx = dx * cos + dy * sin. (using -angle)
                     // Here we use the precomputed cos/sin which were already for -angle.
                     let g_u = dx * cos_a + dy * sin_a + src_cx;
                     let g_v = -dx * sin_a + dy * cos_a + src_cy;
-                    
+
                     // 3. Map Geometry Output -> Distorted Input (Reverse Geometry/Homography)
                     // In apply_geometry: Output UV -> Matrix -> Source UV.
                     // So we map g_u, g_v (which are pixels) to UV.
                     let u_norm = g_u / source_width as f32;
                     let v_norm = g_v / source_height as f32;
-                    
+
                     let mut s_u = u_norm;
                     let mut s_v = v_norm;
-                    
+
                     if let Some(matrix) = &d_matrix {
                         // Homography
                         let src_x_h = matrix[0] * u_norm + matrix[1] * v_norm + matrix[2];
                         let src_y_h = matrix[3] * u_norm + matrix[4] * v_norm + matrix[5];
                         let src_z_h = matrix[6] * u_norm + matrix[7] * v_norm + matrix[8];
-                        
+
                         if src_z_h.abs() > 1e-6 {
                             s_u = src_x_h / src_z_h;
                             s_v = src_y_h / src_z_h;
@@ -320,52 +346,78 @@ pub fn final_render_tiled(
                             s_u = src_x_h;
                             s_v = src_y_h;
                         }
-                        
-                         // Handle flips in Geometry step?
-                        let flip_h = adjustments.geometry.as_ref().map_or(false, |g| g.flip_horizontal.unwrap_or(false));
-                        let flip_v = adjustments.geometry.as_ref().map_or(false, |g| g.flip_vertical.unwrap_or(false));
-                        if flip_h { s_u = 1.0 - s_u; }
-                        if flip_v { s_v = 1.0 - s_v; }
+
+                        // Handle flips in Geometry step?
+                        let flip_h = adjustments
+                            .geometry
+                            .as_ref()
+                            .is_some_and(|g| g.flip_horizontal.unwrap_or(false));
+                        let flip_v = adjustments
+                            .geometry
+                            .as_ref()
+                            .is_some_and(|g| g.flip_vertical.unwrap_or(false));
+                        if flip_h {
+                            s_u = 1.0 - s_u;
+                        }
+                        if flip_v {
+                            s_v = 1.0 - s_v;
+                        }
                     } else {
-                         // Even without homography, flips might be active in "Geometry" settings
-                         let flip_h = adjustments.geometry.as_ref().map_or(false, |g| g.flip_horizontal.unwrap_or(false));
-                        let flip_v = adjustments.geometry.as_ref().map_or(false, |g| g.flip_vertical.unwrap_or(false));
-                        if flip_h { s_u = 1.0 - s_u; }
-                        if flip_v { s_v = 1.0 - s_v; }
+                        // Even without homography, flips might be active in "Geometry" settings
+                        let flip_h = adjustments
+                            .geometry
+                            .as_ref()
+                            .is_some_and(|g| g.flip_horizontal.unwrap_or(false));
+                        let flip_v = adjustments
+                            .geometry
+                            .as_ref()
+                            .is_some_and(|g| g.flip_vertical.unwrap_or(false));
+                        if flip_h {
+                            s_u = 1.0 - s_u;
+                        }
+                        if flip_v {
+                            s_v = 1.0 - s_v;
+                        }
                     }
-                    
+
                     // 4. Map Distorted -> Source (Reverse Lens Distortion)
                     // apply_lens_distortion: OUTPUT UV -> Formula -> INPUT UV.
                     let mut src_u_final = s_u;
                     let mut src_v_final = s_v;
-                    
+
                     if let Some(dist) = &adjustments.distortion {
                         if dist.k1.abs() > 1e-5 || dist.k2.abs() > 1e-5 {
-                             let rel_x = s_u - 0.5;
-                             let rel_y = s_v - 0.5;
-                             let r2 = rel_x * rel_x + rel_y * rel_y;
-                             let scaling = 1.0 + dist.k1 * r2 + dist.k2 * r2 * r2;
-                             src_u_final = 0.5 + rel_x * scaling;
-                             src_v_final = 0.5 + rel_y * scaling;
+                            let rel_x = s_u - 0.5;
+                            let rel_y = s_v - 0.5;
+                            let r2 = rel_x * rel_x + rel_y * rel_y;
+                            let scaling = 1.0 + dist.k1 * r2 + dist.k2 * r2 * r2;
+                            src_u_final = 0.5 + rel_x * scaling;
+                            src_v_final = 0.5 + rel_y * scaling;
                         }
                     }
 
                     // 5. Sample
-                    let final_px = if src_u_final < 0.0 || src_u_final > 1.0 || src_v_final < 0.0 || src_v_final > 1.0 {
-                         Rgba([0,0,0,0])
+                    let final_px = if !(0.0..=1.0).contains(&src_u_final)
+                        || !(0.0..=1.0).contains(&src_v_final)
+                    {
+                        Rgba([0, 0, 0, 0])
                     } else {
-                         sample_bicubic(&source_img, src_u_final * source_width as f32, src_v_final * source_height as f32)
+                        sample_bicubic(
+                            &source_img,
+                            src_u_final * source_width as f32,
+                            src_v_final * source_height as f32,
+                        )
                     };
-                    
+
                     tile_buffer.put_pixel(tx as u32, ty as u32, final_px);
                 }
             }
-            
+
             // Now we have the Geometrically correct padded tile.
             // Apply effects
-            
+
             if let Some(denoise) = &adjustments.denoise {
-               apply_denoise_in_place(&mut tile_buffer, denoise);
+                apply_denoise_in_place(&mut tile_buffer, denoise);
             }
             if let Some(exp) = &adjustments.exposure {
                 apply_exposure_in_place(&mut tile_buffer, exp);
@@ -373,7 +425,7 @@ pub fn final_render_tiled(
             if let Some(col) = &adjustments.color {
                 apply_color_balance_in_place(&mut tile_buffer, col);
             }
-             if let Some(curves) = &adjustments.curves {
+            if let Some(curves) = &adjustments.curves {
                 apply_curves_in_place(&mut tile_buffer, curves);
             }
             if let Some(hsl) = &adjustments.hsl {
@@ -388,10 +440,11 @@ pub fn final_render_tiled(
             if let Some(clarity) = &adjustments.clarity {
                 apply_clarity_in_place(&mut tile_buffer, clarity);
             }
-            if let (Some(lut_settings), Some((lut_data, lut_size))) = (&adjustments.lut, lut_buffer) {
+            if let (Some(lut_settings), Some((lut_data, lut_size))) = (&adjustments.lut, lut_buffer)
+            {
                 apply_lut_in_place(&mut tile_buffer, lut_data, lut_size, lut_settings);
             }
-            
+
             // Vignette needs Global coords: (pad_x, pad_y) are the global coords of the top-left of this tile.
             if let Some(vignette) = &adjustments.vignette {
                 // Ensure we handle negative pad_x correctly?
@@ -406,13 +459,13 @@ pub fn final_render_tiled(
                 // Actually, if we pass pad_x as i32, we can do the math inside.
                 apply_vignette_in_place(&mut tile_buffer, vignette, pad_x, pad_y, final_w, final_h);
             }
-            
+
             if let Some(sharpen) = &adjustments.sharpen {
                 apply_sharpen_in_place(&mut tile_buffer, sharpen);
             }
-            
+
             if let Some(grain) = &adjustments.grain {
-                 // Adjust grain similarly
+                // Adjust grain similarly
                 apply_grain_in_place(&mut tile_buffer, grain, pad_x as u32, pad_y as u32);
             }
 
@@ -422,23 +475,23 @@ pub fn final_render_tiled(
             // Destination: (x, y)
             for ly in 0..limit_h {
                 for lx in 0..limit_w {
-                     // Cast to u32 for get_pixel
-                     let px_u32 = lx + padding as u32;
-                     let py_u32 = ly + padding as u32;
-                     
-                     let tile_px = tile_buffer.get_pixel(px_u32, py_u32);
-                     let dest_x = x + lx;
-                     let dest_y = y + ly;
-                     let di = ((dest_y * final_w + dest_x) * 4) as usize;
-                     result_buffer[di] = tile_px[0];
-                     result_buffer[di+1] = tile_px[1];
-                     result_buffer[di+2] = tile_px[2];
-                     result_buffer[di+3] = tile_px[3];
+                    // Cast to u32 for get_pixel
+                    let px_u32 = lx + padding as u32;
+                    let py_u32 = ly + padding as u32;
+
+                    let tile_px = tile_buffer.get_pixel(px_u32, py_u32);
+                    let dest_x = x + lx;
+                    let dest_y = y + ly;
+                    let di = ((dest_y * final_w + dest_x) * 4) as usize;
+                    result_buffer[di] = tile_px[0];
+                    result_buffer[di + 1] = tile_px[1];
+                    result_buffer[di + 2] = tile_px[2];
+                    result_buffer[di + 3] = tile_px[3];
                 }
             }
         }
     }
-    
+
     Ok((result_buffer, final_w, final_h))
 }
 
@@ -847,7 +900,7 @@ pub(crate) fn apply_grain_in_place(
     // Deterministic RNG setup
     let seed = settings.seed.unwrap_or(42);
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    
+
     // Generate a tileable noise texture effectively
     // To ensure consistency across tiles, we can't just generate a buffer of 'width/height'.
     // We should treat the noise as a repeating texture or hash-based.
@@ -855,12 +908,12 @@ pub(crate) fn apply_grain_in_place(
     // 1024x1024 is enough to hide repetition for grain.
     const NOISE_TILE_SIZE: usize = 1024;
     let mut noise_tile = vec![0.0f32; NOISE_TILE_SIZE * NOISE_TILE_SIZE];
-    
+
     let normal = match Normal::new(0.0, sigma) {
         Ok(n) => n,
         Err(_) => return,
     };
-    
+
     for x in noise_tile.iter_mut() {
         *x = normal.sample(&mut rng);
     }
@@ -869,13 +922,14 @@ pub(crate) fn apply_grain_in_place(
     for y in 0..height {
         let global_y = offset_y + y;
         let ny = global_y / scale;
-        
+
         for x in 0..width {
             let global_x = offset_x + x;
             let nx = global_x / scale;
-            
+
             // Sample from tile
-            let tile_idx = ((ny as usize % NOISE_TILE_SIZE) * NOISE_TILE_SIZE) + (nx as usize % NOISE_TILE_SIZE);
+            let tile_idx = ((ny as usize % NOISE_TILE_SIZE) * NOISE_TILE_SIZE)
+                + (nx as usize % NOISE_TILE_SIZE);
             let noise_val = noise_tile[tile_idx];
 
             let pixel = img.get_pixel_mut(x, y);
@@ -890,13 +944,15 @@ pub(crate) fn apply_grain_in_place(
     }
 }
 
-
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 fn rgb_to_yuv_v128(r: v128, g: v128, b: v128) -> (v128, v128, v128) {
     unsafe {
         let y = f32x4_add(
-            f32x4_add(f32x4_mul(r, f32x4_splat(0.299)), f32x4_mul(g, f32x4_splat(0.587))),
-            f32x4_mul(b, f32x4_splat(0.114))
+            f32x4_add(
+                f32x4_mul(r, f32x4_splat(0.299)),
+                f32x4_mul(g, f32x4_splat(0.587)),
+            ),
+            f32x4_mul(b, f32x4_splat(0.114)),
         );
         let u = f32x4_mul(f32x4_sub(b, y), f32x4_splat(0.492));
         let v = f32x4_mul(f32x4_sub(r, y), f32x4_splat(0.877));
@@ -910,7 +966,7 @@ fn yuv_to_rgb_v128(y: v128, u: v128, v: v128) -> (v128, v128, v128) {
         let r = f32x4_add(y, f32x4_mul(v, f32x4_splat(1.13983)));
         let g = f32x4_sub(
             f32x4_sub(y, f32x4_mul(u, f32x4_splat(0.39465))),
-            f32x4_mul(v, f32x4_splat(0.58060))
+            f32x4_mul(v, f32x4_splat(0.58060)),
         );
         let b = f32x4_add(y, f32x4_mul(u, f32x4_splat(2.03211)));
         (r, g, b)
@@ -928,7 +984,7 @@ pub(crate) fn apply_denoise_in_place(img: &mut RgbaImage, settings: &DenoiseSett
         let (width, height) = img.dimensions();
         // Clone for reading neighbors (expensive but necessary)
         // Alternatively, use a sliding window if we want to be fancy, but random read for kernel is easier with full copy.
-        let source = img.clone(); 
+        let source = img.clone();
         let src_vec = source.as_raw();
         let buffer = img.as_mut();
 
@@ -937,12 +993,12 @@ pub(crate) fn apply_denoise_in_place(img: &mut RgbaImage, settings: &DenoiseSett
         let sigma_r = 0.4 * settings.luminance.max(0.001) * 255.0; // range sigma
         let two_sigma_s_sq = 2.0 * sigma_s * sigma_s;
         let two_sigma_r_sq = 2.0 * sigma_r * sigma_r;
-        
+
         let vec_two_sigma_s_sq = f32x4_splat(two_sigma_s_sq);
         let vec_two_sigma_r_sq = f32x4_splat(two_sigma_r_sq);
         let vec_zero = f32x4_splat(0.0);
         let factor = f32x4_splat(1.0 / 255.0);
-        
+
         let luminance_on = settings.luminance > 0.0;
         let color_on = settings.color > 0.0;
 
@@ -957,9 +1013,9 @@ pub(crate) fn apply_denoise_in_place(img: &mut RgbaImage, settings: &DenoiseSett
                 // Scalar fallback for top/bottom rows
                 // ... (Implementation omitted for brevity, fallback will happen outside unsafe block if we structure correctly)
                 // Actually, let's just do scalar loop for edge logic here or break out.
-                 // For now, process center
+                // For now, process center
             }
-            
+
             let mut x = 0;
             while x < width as usize {
                 // Boundary check
@@ -968,158 +1024,158 @@ pub(crate) fn apply_denoise_in_place(img: &mut RgbaImage, settings: &DenoiseSett
                     // PENDING: to avoid code duplication, we might want to just skip this block and use default scalar?
                     // But we are inside the 'simd specific' function body.
                     // Copy-paste scalar logic for edges:
-                    
+
                     let cx = x as i32;
                     let cy = y as i32;
                     let center_px = source.get_pixel(cx as u32, cy as u32);
                     // ... (Complete scalar logic here is verbose).
-                    
+
                     // Simpler: Just skip processing or clamp in SIMD?
-                    // Safe handling: 
+                    // Safe handling:
                     // To keep it simple: SIMD loop `2..width-2`.
                     // And scalar loop for edges.
                     x += 1;
                     continue;
                 } else {
-                     // Fast path
-                     // x is at least 2, and x+4 < width-2.
-                     // We can load neighbors safely without clamping.
-                     
-                     // Helper to load 4 pixels at offset (dx, dy) relative to current (x,y)
-                     // Base index (y * width + x).
-                     // Neighbor (x+dx, y+dy) for pixel 0.
-                     // For pixel 1: (x+1+dx, y+dy).
-                     // Basically we load 4 pixels starting at base(dx, dy).
-                     
-                     let src_ptr = src_vec.as_ptr();
-                     let dst_ptr = buffer.as_mut_ptr();
-                     
-                     // Center pixels P0..P3
-                     // Load 4 RGBA pixels.
-                     let center_offset = (y * width as usize + x) * 4;
-                     let center_vec_u8 = v128_load(src_ptr.add(center_offset) as *const v128);
-                     
-                     // Deinterleave to R, G, B floats
-                     // Reusing logic from HSL or making a macro/fn would be good.
-                     // Inline for now.
-                     let lo = u16x8_extend_low_u8x16(center_vec_u8);
-                     let hi = u16x8_extend_high_u8x16(center_vec_u8);
-                     let p1 = f32x4_convert_u32x4(u32x4_extend_low_u16x8(lo));
-                     let p2 = f32x4_convert_u32x4(u32x4_extend_high_u16x8(lo));
-                     let p3 = f32x4_convert_u32x4(u32x4_extend_low_u16x8(hi));
-                     let p4 = f32x4_convert_u32x4(u32x4_extend_high_u16x8(hi));
-                     
-                     let t1 = u32x4_shuffle::<0, 4, 1, 5>(p1, p2);
-                     let t2 = u32x4_shuffle::<0, 4, 1, 5>(p3, p4);
-                     let t3 = u32x4_shuffle::<2, 6, 3, 7>(p1, p2);
-                     let t4 = u32x4_shuffle::<2, 6, 3, 7>(p3, p4);
-                     let c_r = u32x4_shuffle::<0, 1, 4, 5>(t1, t2);
-                     let c_g = u32x4_shuffle::<2, 3, 6, 7>(t1, t2);
-                     let c_b = u32x4_shuffle::<0, 1, 4, 5>(t3, t4);
-                     let c_a = u32x4_shuffle::<2, 3, 6, 7>(t3, t4); // Keep alpha
-                     
-                     let (c_y, c_u, c_v) = rgb_to_yuv_v128(c_r, c_g, c_b);
+                    // Fast path
+                    // x is at least 2, and x+4 < width-2.
+                    // We can load neighbors safely without clamping.
 
-                     let mut final_y = vec_zero;
-                     let mut weight_y = vec_zero;
-                     let mut final_u = vec_zero;
-                     let mut final_v = vec_zero;
-                     let mut weight_c = vec_zero;
-                     
-                     for j in -2..=2 {
-                         for i in -2..=2 {
-                             // Neighbor offset
-                             let n_offset = ((y as i32 + j) * width as i32 + (x as i32 + i)) as usize * 4;
-                             let n_vec_u8 = v128_load(src_ptr.add(n_offset) as *const v128);
-                             
-                             let n_lo = u16x8_extend_low_u8x16(n_vec_u8);
-                             let n_hi = u16x8_extend_high_u8x16(n_vec_u8);
-                             let np1 = f32x4_convert_u32x4(u32x4_extend_low_u16x8(n_lo));
-                             let np2 = f32x4_convert_u32x4(u32x4_extend_high_u16x8(n_lo));
-                             let np3 = f32x4_convert_u32x4(u32x4_extend_low_u16x8(n_hi));
-                             let np4 = f32x4_convert_u32x4(u32x4_extend_high_u16x8(n_hi));
-                             
-                             let nt1 = u32x4_shuffle::<0, 4, 1, 5>(np1, np2);
-                             let nt2 = u32x4_shuffle::<0, 4, 1, 5>(np3, np4);
-                             let nt3 = u32x4_shuffle::<2, 6, 3, 7>(np1, np2);
-                             let nt4 = u32x4_shuffle::<2, 6, 3, 7>(np3, np4);
-                             let n_r = u32x4_shuffle::<0, 1, 4, 5>(nt1, nt2);
-                             let n_g = u32x4_shuffle::<2, 3, 6, 7>(nt1, nt2);
-                             let n_b = u32x4_shuffle::<0, 1, 4, 5>(nt3, nt4);
-                             
-                             let (n_y, n_u, n_v) = rgb_to_yuv_v128(n_r, n_g, n_b);
+                    // Helper to load 4 pixels at offset (dx, dy) relative to current (x,y)
+                    // Base index (y * width + x).
+                    // Neighbor (x+dx, y+dy) for pixel 0.
+                    // For pixel 1: (x+1+dx, y+dy).
+                    // Basically we load 4 pixels starting at base(dx, dy).
 
-                             let dist_sq = (i * i + j * j) as f32;
-                             let w_spatial_scalar = (-dist_sq / two_sigma_s_sq).exp();
-                             let w_spatial = f32x4_splat(w_spatial_scalar);
-                             
-                             if luminance_on {
-                                 let diff = f32x4_abs(f32x4_sub(n_y, c_y));
-                                 let diff_sq = f32x4_mul(diff, diff);
-                                 // range weight = exp(-diff^2 / 2sigma_r^2)
-                                 // SIMD exp approximation needed?
-                                 // Fallback: extract lanes, exp, pack.
-                                 let d0 = f32x4_extract_lane::<0>(diff_sq);
-                                 let d1 = f32x4_extract_lane::<1>(diff_sq);
-                                 let d2 = f32x4_extract_lane::<2>(diff_sq);
-                                 let d3 = f32x4_extract_lane::<3>(diff_sq);
-                                 // scalar exp
-                                 let r0 = (-d0 / two_sigma_r_sq).exp();
-                                 let r1 = (-d1 / two_sigma_r_sq).exp();
-                                 let r2 = (-d2 / two_sigma_r_sq).exp();
-                                 let r3 = (-d3 / two_sigma_r_sq).exp();
-                                 let w_range = v128_load([r0, r1, r2, r3].as_ptr() as *const v128);
-                                 
-                                 let w = f32x4_mul(w_spatial, w_range);
-                                 final_y = f32x4_add(final_y, f32x4_mul(n_y, w));
-                                 weight_y = f32x4_add(weight_y, w);
-                             }
-                             
-                             if color_on {
-                                 final_u = f32x4_add(final_u, f32x4_mul(n_u, w_spatial));
-                                 final_v = f32x4_add(final_v, f32x4_mul(n_v, w_spatial));
-                                 weight_c = f32x4_add(weight_c, w_spatial);
-                             }
-                         }
-                     }
-                     
+                    let src_ptr = src_vec.as_ptr();
+                    let dst_ptr = buffer.as_mut_ptr();
 
-                     // Resolve
-                     let out_y = f32x4_div(final_y, f32x4_max(weight_y, f32x4_splat(1e-6)));
-                     let out_u = f32x4_div(final_u, f32x4_max(weight_c, f32x4_splat(1e-6)));
-                     let out_v = f32x4_div(final_v, f32x4_max(weight_c, f32x4_splat(1e-6)));
-                     
-                     // Simply use logic for conditional update
-                     // Bitselect is useful if we computed providing both paths.
-                     // But here we want: if luminance_on { out_y } else { c_y }.
-                     // Since luminance_on is scalar bool constant for the loop, we can just use Rust if?
-                     // Yes! "if luminance_on" is outside.
-                     // The variables "out_y" and "c_y" are vectors.
-                     // We can just say:
-                     let r_y = if luminance_on { out_y } else { c_y };
-                     let r_u = if color_on { out_u } else { c_u };
-                     let r_v = if color_on { out_v } else { c_v };
-                     
-                     let (res_r, res_g, res_b) = yuv_to_rgb_v128(r_y, r_u, r_v);
-                     
-                     // Pack back to u8 (same logic as HSL)
-                     let r_i = i32x4_trunc_sat_f32x4(res_r);
-                     let g_i = i32x4_trunc_sat_f32x4(res_g);
-                     let b_i = i32x4_trunc_sat_f32x4(res_b);
-                     let a_i = i32x4_trunc_sat_f32x4(c_a);
-                     
-                     let t1 = u32x4_shuffle::<0, 4, 1, 5>(r_i, g_i);
-                     let t2 = u32x4_shuffle::<2, 6, 3, 7>(r_i, g_i);
-                     let t3 = u32x4_shuffle::<0, 4, 1, 5>(b_i, a_i);
-                     let t4 = u32x4_shuffle::<2, 6, 3, 7>(b_i, a_i);
-                     let p12 = u32x4_shuffle::<0, 2, 1, 3>(t1, t3);
-                     let p34 = u32x4_shuffle::<0, 2, 1, 3>(t2, t4);
-                     let p_u16 = u16x8_narrow_i32x4(p12, p34);
-                     let res_u8 = u8x16_narrow_i16x8(p_u16, p_u16);
-                     
-                     v128_store(dst_ptr.add(center_offset) as *mut v128, res_u8);
+                    // Center pixels P0..P3
+                    // Load 4 RGBA pixels.
+                    let center_offset = (y * width as usize + x) * 4;
+                    let center_vec_u8 = v128_load(src_ptr.add(center_offset) as *const v128);
 
-                     x += 4;
+                    // Deinterleave to R, G, B floats
+                    // Reusing logic from HSL or making a macro/fn would be good.
+                    // Inline for now.
+                    let lo = u16x8_extend_low_u8x16(center_vec_u8);
+                    let hi = u16x8_extend_high_u8x16(center_vec_u8);
+                    let p1 = f32x4_convert_u32x4(u32x4_extend_low_u16x8(lo));
+                    let p2 = f32x4_convert_u32x4(u32x4_extend_high_u16x8(lo));
+                    let p3 = f32x4_convert_u32x4(u32x4_extend_low_u16x8(hi));
+                    let p4 = f32x4_convert_u32x4(u32x4_extend_high_u16x8(hi));
+
+                    let t1 = u32x4_shuffle::<0, 4, 1, 5>(p1, p2);
+                    let t2 = u32x4_shuffle::<0, 4, 1, 5>(p3, p4);
+                    let t3 = u32x4_shuffle::<2, 6, 3, 7>(p1, p2);
+                    let t4 = u32x4_shuffle::<2, 6, 3, 7>(p3, p4);
+                    let c_r = u32x4_shuffle::<0, 1, 4, 5>(t1, t2);
+                    let c_g = u32x4_shuffle::<2, 3, 6, 7>(t1, t2);
+                    let c_b = u32x4_shuffle::<0, 1, 4, 5>(t3, t4);
+                    let c_a = u32x4_shuffle::<2, 3, 6, 7>(t3, t4); // Keep alpha
+
+                    let (c_y, c_u, c_v) = rgb_to_yuv_v128(c_r, c_g, c_b);
+
+                    let mut final_y = vec_zero;
+                    let mut weight_y = vec_zero;
+                    let mut final_u = vec_zero;
+                    let mut final_v = vec_zero;
+                    let mut weight_c = vec_zero;
+
+                    for j in -2..=2 {
+                        for i in -2..=2 {
+                            // Neighbor offset
+                            let n_offset =
+                                ((y as i32 + j) * width as i32 + (x as i32 + i)) as usize * 4;
+                            let n_vec_u8 = v128_load(src_ptr.add(n_offset) as *const v128);
+
+                            let n_lo = u16x8_extend_low_u8x16(n_vec_u8);
+                            let n_hi = u16x8_extend_high_u8x16(n_vec_u8);
+                            let np1 = f32x4_convert_u32x4(u32x4_extend_low_u16x8(n_lo));
+                            let np2 = f32x4_convert_u32x4(u32x4_extend_high_u16x8(n_lo));
+                            let np3 = f32x4_convert_u32x4(u32x4_extend_low_u16x8(n_hi));
+                            let np4 = f32x4_convert_u32x4(u32x4_extend_high_u16x8(n_hi));
+
+                            let nt1 = u32x4_shuffle::<0, 4, 1, 5>(np1, np2);
+                            let nt2 = u32x4_shuffle::<0, 4, 1, 5>(np3, np4);
+                            let nt3 = u32x4_shuffle::<2, 6, 3, 7>(np1, np2);
+                            let nt4 = u32x4_shuffle::<2, 6, 3, 7>(np3, np4);
+                            let n_r = u32x4_shuffle::<0, 1, 4, 5>(nt1, nt2);
+                            let n_g = u32x4_shuffle::<2, 3, 6, 7>(nt1, nt2);
+                            let n_b = u32x4_shuffle::<0, 1, 4, 5>(nt3, nt4);
+
+                            let (n_y, n_u, n_v) = rgb_to_yuv_v128(n_r, n_g, n_b);
+
+                            let dist_sq = (i * i + j * j) as f32;
+                            let w_spatial_scalar = (-dist_sq / two_sigma_s_sq).exp();
+                            let w_spatial = f32x4_splat(w_spatial_scalar);
+
+                            if luminance_on {
+                                let diff = f32x4_abs(f32x4_sub(n_y, c_y));
+                                let diff_sq = f32x4_mul(diff, diff);
+                                // range weight = exp(-diff^2 / 2sigma_r^2)
+                                // SIMD exp approximation needed?
+                                // Fallback: extract lanes, exp, pack.
+                                let d0 = f32x4_extract_lane::<0>(diff_sq);
+                                let d1 = f32x4_extract_lane::<1>(diff_sq);
+                                let d2 = f32x4_extract_lane::<2>(diff_sq);
+                                let d3 = f32x4_extract_lane::<3>(diff_sq);
+                                // scalar exp
+                                let r0 = (-d0 / two_sigma_r_sq).exp();
+                                let r1 = (-d1 / two_sigma_r_sq).exp();
+                                let r2 = (-d2 / two_sigma_r_sq).exp();
+                                let r3 = (-d3 / two_sigma_r_sq).exp();
+                                let w_range = v128_load([r0, r1, r2, r3].as_ptr() as *const v128);
+
+                                let w = f32x4_mul(w_spatial, w_range);
+                                final_y = f32x4_add(final_y, f32x4_mul(n_y, w));
+                                weight_y = f32x4_add(weight_y, w);
+                            }
+
+                            if color_on {
+                                final_u = f32x4_add(final_u, f32x4_mul(n_u, w_spatial));
+                                final_v = f32x4_add(final_v, f32x4_mul(n_v, w_spatial));
+                                weight_c = f32x4_add(weight_c, w_spatial);
+                            }
+                        }
+                    }
+
+                    // Resolve
+                    let out_y = f32x4_div(final_y, f32x4_max(weight_y, f32x4_splat(1e-6)));
+                    let out_u = f32x4_div(final_u, f32x4_max(weight_c, f32x4_splat(1e-6)));
+                    let out_v = f32x4_div(final_v, f32x4_max(weight_c, f32x4_splat(1e-6)));
+
+                    // Simply use logic for conditional update
+                    // Bitselect is useful if we computed providing both paths.
+                    // But here we want: if luminance_on { out_y } else { c_y }.
+                    // Since luminance_on is scalar bool constant for the loop, we can just use Rust if?
+                    // Yes! "if luminance_on" is outside.
+                    // The variables "out_y" and "c_y" are vectors.
+                    // We can just say:
+                    let r_y = if luminance_on { out_y } else { c_y };
+                    let r_u = if color_on { out_u } else { c_u };
+                    let r_v = if color_on { out_v } else { c_v };
+
+                    let (res_r, res_g, res_b) = yuv_to_rgb_v128(r_y, r_u, r_v);
+
+                    // Pack back to u8 (same logic as HSL)
+                    let r_i = i32x4_trunc_sat_f32x4(res_r);
+                    let g_i = i32x4_trunc_sat_f32x4(res_g);
+                    let b_i = i32x4_trunc_sat_f32x4(res_b);
+                    let a_i = i32x4_trunc_sat_f32x4(c_a);
+
+                    let t1 = u32x4_shuffle::<0, 4, 1, 5>(r_i, g_i);
+                    let t2 = u32x4_shuffle::<2, 6, 3, 7>(r_i, g_i);
+                    let t3 = u32x4_shuffle::<0, 4, 1, 5>(b_i, a_i);
+                    let t4 = u32x4_shuffle::<2, 6, 3, 7>(b_i, a_i);
+                    let p12 = u32x4_shuffle::<0, 2, 1, 3>(t1, t3);
+                    let p34 = u32x4_shuffle::<0, 2, 1, 3>(t2, t4);
+                    let p_u16 = u16x8_narrow_i32x4(p12, p34);
+                    let res_u8 = u8x16_narrow_i16x8(p_u16, p_u16);
+
+                    v128_store(dst_ptr.add(center_offset) as *mut v128, res_u8);
+
+                    x += 4;
                 }
             }
             y += 1;
@@ -1133,116 +1189,115 @@ pub(crate) fn apply_denoise_in_place(img: &mut RgbaImage, settings: &DenoiseSett
         // Since we did in-place but cloned source, pixels not written are strictly original noisy pixels?
         // No, `img` is mutated. If we didn't write, it stays original.
         // A 2-pixel border of noise is acceptable for "Minimal Viewer" optimization example.
-        
+
         return;
     }
 
     #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
     {
-    // ... (Original scalar implementation)
-    if settings.luminance <= 0.0 && settings.color <= 0.0 {
-        return;
-    }
+        // ... (Original scalar implementation)
+        if settings.luminance <= 0.0 && settings.color <= 0.0 {
+            return;
+        }
 
-    let (width, height) = img.dimensions();
-    let source = img.clone(); // Need source for reading neighbors
+        let (width, height) = img.dimensions();
+        let source = img.clone(); // Need source for reading neighbors
 
-    for y in 0..height {
-        for x in 0..width {
-            let cx = x as i32;
-            let cy = y as i32;
+        for y in 0..height {
+            for x in 0..width {
+                let cx = x as i32;
+                let cy = y as i32;
 
-            let center_px = source.get_pixel(x, y);
-            let center_rgb = [
-                center_px[0] as f32,
-                center_px[1] as f32,
-                center_px[2] as f32,
-            ];
-            let center_yuv = rgb_to_yuv(center_rgb);
+                let center_px = source.get_pixel(x, y);
+                let center_rgb = [
+                    center_px[0] as f32,
+                    center_px[1] as f32,
+                    center_px[2] as f32,
+                ];
+                let center_yuv = rgb_to_yuv(center_rgb);
 
-            let mut final_y = 0.0;
-            let mut weight_y = 0.0;
+                let mut final_y = 0.0;
+                let mut weight_y = 0.0;
 
-            let mut final_u = 0.0;
-            let mut final_v = 0.0;
-            let mut weight_c = 0.0;
+                let mut final_u = 0.0;
+                let mut final_v = 0.0;
+                let mut weight_c = 0.0;
 
-            // Kernel size 5x5 (radius 2)
-            let radius = 2;
-            // Sigma parameters (approximate shader logic)
-            let sigma_s = 2.0;
-            let sigma_r = 0.4 * settings.luminance.max(0.001) * 255.0; // Scale to 0..255 range
+                // Kernel size 5x5 (radius 2)
+                let radius = 2;
+                // Sigma parameters (approximate shader logic)
+                let sigma_s = 2.0;
+                let sigma_r = 0.4 * settings.luminance.max(0.001) * 255.0; // Scale to 0..255 range
 
-            for j in -radius..=radius {
-                for i in -radius..=radius {
-                    let nx = cx + i;
-                    let ny = cy + j;
+                for j in -radius..=radius {
+                    for i in -radius..=radius {
+                        let nx = cx + i;
+                        let ny = cy + j;
 
-                    // Clamped lookup
-                    let px = if nx >= 0 && nx < width as i32 && ny >= 0 && ny < height as i32 {
-                        source.get_pixel(nx as u32, ny as u32)
-                    } else {
-                        // Clamp to edge
-                        let cnx = nx.max(0).min(width as i32 - 1);
-                        let cny = ny.max(0).min(height as i32 - 1);
-                        source.get_pixel(cnx as u32, cny as u32)
-                    };
+                        // Clamped lookup
+                        let px = if nx >= 0 && nx < width as i32 && ny >= 0 && ny < height as i32 {
+                            source.get_pixel(nx as u32, ny as u32)
+                        } else {
+                            // Clamp to edge
+                            let cnx = nx.max(0).min(width as i32 - 1);
+                            let cny = ny.max(0).min(height as i32 - 1);
+                            source.get_pixel(cnx as u32, cny as u32)
+                        };
 
-                    let rgb = [px[0] as f32, px[1] as f32, px[2] as f32];
-                    let yuv = rgb_to_yuv(rgb);
+                        let rgb = [px[0] as f32, px[1] as f32, px[2] as f32];
+                        let yuv = rgb_to_yuv(rgb);
 
-                    let dist_sq = (i * i + j * j) as f32;
-                    let w_spatial = (-(dist_sq) / (2.0 * sigma_s * sigma_s)).exp();
+                        let dist_sq = (i * i + j * j) as f32;
+                        let w_spatial = (-(dist_sq) / (2.0 * sigma_s * sigma_s)).exp();
 
-                    // Luminance: Bilateral
-                    if settings.luminance > 0.0 {
-                        let diff = (yuv[0] - center_yuv[0]).abs();
-                        let w_range = (-(diff * diff) / (2.0 * sigma_r * sigma_r)).exp();
-                        let w = w_spatial * w_range;
-                        final_y += yuv[0] * w;
-                        weight_y += w;
-                    }
+                        // Luminance: Bilateral
+                        if settings.luminance > 0.0 {
+                            let diff = (yuv[0] - center_yuv[0]).abs();
+                            let w_range = (-(diff * diff) / (2.0 * sigma_r * sigma_r)).exp();
+                            let w = w_spatial * w_range;
+                            final_y += yuv[0] * w;
+                            weight_y += w;
+                        }
 
-                    // Color: Spatial only
-                    if settings.color > 0.0 {
-                        final_u += yuv[1] * w_spatial;
-                        final_v += yuv[2] * w_spatial;
-                        weight_c += w_spatial;
+                        // Color: Spatial only
+                        if settings.color > 0.0 {
+                            final_u += yuv[1] * w_spatial;
+                            final_v += yuv[2] * w_spatial;
+                            weight_c += w_spatial;
+                        }
                     }
                 }
+
+                let out_y = if settings.luminance > 0.0 && weight_y > 0.0 {
+                    final_y / weight_y
+                } else {
+                    center_yuv[0]
+                };
+
+                let out_u = if settings.color > 0.0 && weight_c > 0.0 {
+                    final_u / weight_c
+                } else {
+                    center_yuv[1]
+                };
+
+                let out_v = if settings.color > 0.0 && weight_c > 0.0 {
+                    final_v / weight_c
+                } else {
+                    center_yuv[2]
+                };
+
+                let out_rgb = yuv_to_rgb([out_y, out_u, out_v]);
+                let res_px = Rgba([
+                    clamp_u8(out_rgb[0]),
+                    clamp_u8(out_rgb[1]),
+                    clamp_u8(out_rgb[2]),
+                    center_px[3],
+                ]);
+                img.put_pixel(x, y, res_px);
             }
-
-            let out_y = if settings.luminance > 0.0 && weight_y > 0.0 {
-                final_y / weight_y
-            } else {
-                center_yuv[0]
-            };
-
-            let out_u = if settings.color > 0.0 && weight_c > 0.0 {
-                final_u / weight_c
-            } else {
-                center_yuv[1]
-            };
-
-            let out_v = if settings.color > 0.0 && weight_c > 0.0 {
-                final_v / weight_c
-            } else {
-                center_yuv[2]
-            };
-
-            let out_rgb = yuv_to_rgb([out_y, out_u, out_v]);
-            let res_px = Rgba([
-                clamp_u8(out_rgb[0]),
-                clamp_u8(out_rgb[1]),
-                clamp_u8(out_rgb[2]),
-                center_px[3],
-            ]);
-            img.put_pixel(x, y, res_px);
         }
     }
-    }
 }
-
 
 // Helpers
 fn rgb_to_yuv(rgb: [f32; 3]) -> [f32; 3] {
@@ -1322,7 +1377,6 @@ fn hsl_to_rgb(hsl: [f32; 3]) -> [f32; 3] {
     [r + m, g + m, b + m]
 }
 
-
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 fn rgb_to_hsl_v128(r: v128, g: v128, b: v128) -> (v128, v128, v128) {
     unsafe {
@@ -1331,7 +1385,7 @@ fn rgb_to_hsl_v128(r: v128, g: v128, b: v128) -> (v128, v128, v128) {
         let delta = f32x4_sub(max_val, min_val);
 
         let delta_is_zero = f32x4_eq(delta, f32x4_splat(0.0));
-        
+
         let delta_nonzero = f32x4_max(delta, f32x4_splat(1e-6)); // Avoid div by zero
         let delta_inv = f32x4_div(f32x4_splat(1.0), delta_nonzero);
 
@@ -1347,19 +1401,15 @@ fn rgb_to_hsl_v128(r: v128, g: v128, b: v128) -> (v128, v128, v128) {
         // Case 3: Max == B -> (r - g) / delta + 4.0
         let h3 = f32x4_add(f32x4_mul(f32x4_sub(r, g), delta_inv), f32x4_splat(4.0));
 
-        let h_term = v128_bitselect(
-            h1,
-            v128_bitselect(h2, h3, g_eq_max),
-            r_eq_max
-        );
-        
+        let h_term = v128_bitselect(h1, v128_bitselect(h2, h3, g_eq_max), r_eq_max);
+
         // h = h_term / 6.0
         let mut h = f32x4_div(h_term, f32x4_splat(6.0));
-        
+
         // if h < 0, h += 1
         let h_neg = f32x4_lt(h, f32x4_splat(0.0));
         h = v128_bitselect(f32x4_add(h, f32x4_splat(1.0)), h, h_neg);
-        
+
         // If delta == 0, h = 0
         h = v128_bitselect(f32x4_splat(0.0), h, delta_is_zero);
 
@@ -1371,7 +1421,7 @@ fn rgb_to_hsl_v128(r: v128, g: v128, b: v128) -> (v128, v128, v128) {
         let abs_2l_minus_1 = f32x4_abs(f32x4_sub(f32x4_mul(l, f32x4_splat(2.0)), f32x4_splat(1.0)));
         let denom = f32x4_sub(f32x4_splat(1.0), abs_2l_minus_1);
         let denom_nonzero = f32x4_max(denom, f32x4_splat(1e-6));
-        
+
         let s = f32x4_div(delta, denom_nonzero);
         let final_s = v128_bitselect(f32x4_splat(0.0), s, delta_is_zero);
 
@@ -1383,25 +1433,31 @@ fn rgb_to_hsl_v128(r: v128, g: v128, b: v128) -> (v128, v128, v128) {
 fn hsl_to_rgb_v128(h: v128, s: v128, l: v128) -> (v128, v128, v128) {
     unsafe {
         let c = f32x4_mul(
-             f32x4_sub(f32x4_splat(1.0), f32x4_abs(f32x4_sub(f32x4_mul(l, f32x4_splat(2.0)), f32x4_splat(1.0)))),
-             s
+            f32x4_sub(
+                f32x4_splat(1.0),
+                f32x4_abs(f32x4_sub(f32x4_mul(l, f32x4_splat(2.0)), f32x4_splat(1.0))),
+            ),
+            s,
         );
-        
+
         let h_times_6 = f32x4_mul(h, f32x4_splat(6.0));
         // (h*6 % 2) - 1
         // x = c * (1 - abs((h*6 % 2) - 1))
-        
+
         // Simulating fmod(v, 2.0): v - 2.0 * floor(v/2.0)
         let div2 = f32x4_div(h_times_6, f32x4_splat(2.0));
         let floor_div2 = f32x4_floor(div2);
         let rem2 = f32x4_sub(h_times_6, f32x4_mul(floor_div2, f32x4_splat(2.0)));
-        
-        let x_factor = f32x4_sub(f32x4_splat(1.0), f32x4_abs(f32x4_sub(rem2, f32x4_splat(1.0))));
+
+        let x_factor = f32x4_sub(
+            f32x4_splat(1.0),
+            f32x4_abs(f32x4_sub(rem2, f32x4_splat(1.0))),
+        );
         let x = f32x4_mul(c, x_factor);
-        
+
         // m = l - c/2
         let m = f32x4_sub(l, f32x4_div(c, f32x4_splat(2.0)));
-        
+
         // Logic for RGB picking based on H range
         // Range indices: h < 1/6, 2/6 etc.
         // But we have h_times_6 (0..6).
@@ -1411,46 +1467,46 @@ fn hsl_to_rgb_v128(h: v128, s: v128, l: v128) -> (v128, v128, v128) {
         // 3..4: (0, x, c)
         // 4..5: (x, 0, c)
         // 5..6: (c, 0, x)
-        
+
         let zero = f32x4_splat(0.0);
-        
+
         let lt_1 = f32x4_lt(h_times_6, f32x4_splat(1.0));
         let lt_2 = f32x4_lt(h_times_6, f32x4_splat(2.0));
         let lt_3 = f32x4_lt(h_times_6, f32x4_splat(3.0));
         let lt_4 = f32x4_lt(h_times_6, f32x4_splat(4.0));
         let lt_5 = f32x4_lt(h_times_6, f32x4_splat(5.0));
-        
+
         // We select backwards to nest bitselects
         // else case (5..6): (c, 0, x)
-        let mut r = c; 
-        let mut g = zero; 
-        let mut b = x; 
-        
+        let mut r = c;
+        let mut g = zero;
+        let mut b = x;
+
         // Case < 5 (x, 0, c)
         r = v128_bitselect(x, r, lt_5);
         g = v128_bitselect(zero, g, lt_5);
         b = v128_bitselect(c, b, lt_5);
-        
+
         // Case < 4 (0, x, c)
         r = v128_bitselect(zero, r, lt_4);
         g = v128_bitselect(x, g, lt_4);
         b = v128_bitselect(c, b, lt_4);
-        
+
         // Case < 3 (0, c, x)
         r = v128_bitselect(zero, r, lt_3);
         g = v128_bitselect(c, g, lt_3);
         b = v128_bitselect(x, b, lt_3);
-        
+
         // Case < 2 (x, c, 0)
         r = v128_bitselect(x, r, lt_2);
         g = v128_bitselect(c, g, lt_2);
         b = v128_bitselect(zero, b, lt_2);
-        
+
         // Case < 1 (c, x, 0)
         r = v128_bitselect(c, r, lt_1);
         g = v128_bitselect(x, g, lt_1);
         b = v128_bitselect(zero, b, lt_1);
-        
+
         (f32x4_add(r, m), f32x4_add(g, m), f32x4_add(b, m))
     }
 }
@@ -1462,7 +1518,7 @@ pub(crate) fn apply_hsl_in_place(img: &mut RgbaImage, settings: &HslSettings) {
         let (width, height) = img.dimensions();
         let buffer = img.as_mut();
         let total_len = buffer.len();
-        
+
         let ranges = [
             (0.0 / 360.0, &settings.red),
             (30.0 / 360.0, &settings.orange),
@@ -1497,31 +1553,31 @@ pub(crate) fn apply_hsl_in_place(img: &mut RgbaImage, settings: &HslSettings) {
         let mut i = 0;
         while i + 16 <= total_len {
             let ptr = buffer.as_mut_ptr().add(i);
-            
+
             // Load 4 pixels: R1G1B1A1 R2G2B2A2 R3G3B3A3 R4G4B4A4 (u8)
             let pixels_u8 = v128_load(ptr as *const v128);
-            
+
             // Unpack to u32s then f32s ? No, SOA is better.
             // R: P1R, P2R, P3R, P4R
             // We need to deinterleave.
             // v128_load_deinterleave? Rust doesn't expose this nicely or it doesn't exist in minimal wasm simd.
             // We can unpack.
             // Low/High unpacks.
-            
+
             // Strategy: Unpack u8 -> u16 -> u32 -> f32.
             let lo_u16 = u16x8_extend_low_u8x16(pixels_u8);
             let hi_u16 = u16x8_extend_high_u8x16(pixels_u8);
-            
+
             let p1_u32 = u32x4_extend_low_u16x8(lo_u16); // R1 G1 B1 A1
             let p2_u32 = u32x4_extend_high_u16x8(lo_u16); // R2 G2 B2 A2
             let p3_u32 = u32x4_extend_low_u16x8(hi_u16);
             let p4_u32 = u32x4_extend_high_u16x8(hi_u16);
-            
+
             let p1_f = f32x4_convert_u32x4(p1_u32);
             let p2_f = f32x4_convert_u32x4(p2_u32);
             let p3_f = f32x4_convert_u32x4(p3_u32);
             let p4_f = f32x4_convert_u32x4(p4_u32);
-            
+
             // Now we have pixels in registers. We want Transposed (SOA) form: RRRR, GGGG, BBBB, AAAA.
             // _MM_TRANSPOSE4_PS equivalent.
             // shuffle!
@@ -1530,233 +1586,237 @@ pub(crate) fn apply_hsl_in_place(img: &mut RgbaImage, settings: &HslSettings) {
             // p2: 4 5 6 7
             // p3: 8 9 10 11
             // p4: 12 13 14 15
-            
+
             // t1 = p1 p2 (low) => 0 1 4 5
             // t2 = p3 p4 (low) => 8 9 12 13
             // t3 = p1 p2 (high) => 2 3 6 7
             // t4 = p3 p4 (high) => 10 11 14 15
-            
+
             // we use v128_shuffle.
             /*
-              Rust shuffle usage:
-              u32x4_shuffle(a, b, [0, 4, 1, 5]) ?
-              Standard shuffle takes lane indices 0..7.
-             */
-             
-             let t1 = u32x4_shuffle::<0, 4, 1, 5>(p1_f, p2_f); // R1 R2 G1 G2
-             let t2 = u32x4_shuffle::<0, 4, 1, 5>(p3_f, p4_f); // R3 R4 G3 G4
-             let t3 = u32x4_shuffle::<2, 6, 3, 7>(p1_f, p2_f); // B1 B2 A1 A2
-             let t4 = u32x4_shuffle::<2, 6, 3, 7>(p3_f, p4_f); // B3 B4 A3 A4
-             
-             let r_vec = u32x4_shuffle::<0, 1, 4, 5>(t1, t2); // R1 R2 R3 R4
-             let g_vec = u32x4_shuffle::<2, 3, 6, 7>(t1, t2); // G1 G2 G3 G4
-             let b_vec = u32x4_shuffle::<0, 1, 4, 5>(t3, t4); // B1 B2 B3 B4
-             let a_vec = u32x4_shuffle::<2, 3, 6, 7>(t3, t4); // A1 A2 A3 A4
-             
-             // Normalize 0..1
-             let factor = f32x4_splat(1.0 / 255.0);
-             let r_n = f32x4_mul(r_vec, factor);
-             let g_n = f32x4_mul(g_vec, factor);
-             let b_n = f32x4_mul(b_vec, factor);
-             
-             let (mut h, mut s, mut l) = rgb_to_hsl_v128(r_n, g_n, b_n);
-             
-             let mut delta_h = zero;
-             let mut delta_s = zero;
-             let mut delta_l = zero;
-             
-             for (center, s_hue, s_sat, s_lum) in &simdS {
-                 let mut dist = f32x4_abs(f32x4_sub(h, *center));
-                 let dist_gt_05 = f32x4_gt(dist, f32x4_splat(0.5));
-                 // if dist > 0.5 { dist = 1.0 - dist }
-                 dist = v128_bitselect(f32x4_sub(one, dist), dist, dist_gt_05);
-                 
-                 let in_range = f32x4_lt(dist, width_factor);
-                 
-                 // t = dist / width
-                 let t = f32x4_div(dist, width_factor);
-                 // weight = 1 - t*t*(3 - 2t)
-                 let weight = f32x4_sub(one, f32x4_mul(f32x4_mul(t, t), f32x4_sub(three, f32x4_mul(two, t))));
-                 
-                 let applied_weight = v128_bitselect(weight, zero, in_range);
-                 
-                 delta_h = f32x4_add(delta_h, f32x4_mul(*s_hue, applied_weight));
-                 delta_s = f32x4_add(delta_s, f32x4_mul(*s_sat, applied_weight));
-                 delta_l = f32x4_add(delta_l, f32x4_mul(*s_lum, applied_weight));
-             }
-             
-             // Wrap Hue
-              // h + delta_h * (30/360) 
-             let h_shifted = f32x4_add(h, f32x4_mul(delta_h, hue_shift_scale));
-             // rem_euclid(1.0) for simd?
-             // v - floor(v) works for positive v. But shift can make it negative.
-             // x - floor(x).
-             let floor_h = f32x4_floor(h_shifted);
-             h = f32x4_sub(h_shifted, floor_h);
+             Rust shuffle usage:
+             u32x4_shuffle(a, b, [0, 4, 1, 5]) ?
+             Standard shuffle takes lane indices 0..7.
+            */
 
-             s = clamp_v128(f32x4_add(s, delta_s), zero, one);
-             l = clamp_v128(f32x4_add(l, delta_l), zero, one);
-             
-             let (mut r_out, mut g_out, mut b_out) = hsl_to_rgb_v128(h, s, l);
-             
-             let scale = f32x4_splat(255.0);
-             let r_final = f32x4_mul(r_out, scale);
-             let g_final = f32x4_mul(g_out, scale);
-             let b_final = f32x4_mul(b_out, scale);
-             
-             let r_u32 = i32x4_trunc_sat_f32x4(r_final);
-             let g_u32 = i32x4_trunc_sat_f32x4(g_final);
-             let b_u32 = i32x4_trunc_sat_f32x4(b_final);
-             let a_u32 = i32x4_trunc_sat_f32x4(a_vec);
-             
-             // Transpose Back to R1 G1 B1 A1 ...
-             // r: 0 1 2 3
-             // g: 4 5 6 7
-             // b: 8 9 10 11
-             // a: 12 13 14 15
-             
-             let t1 = u32x4_shuffle::<0, 4, 1, 5>(r_u32, g_u32); // R1 G1 R2 G2
-             let t2 = u32x4_shuffle::<2, 6, 3, 7>(r_u32, g_u32); // R3 G3 R4 G4
-             let t3 = u32x4_shuffle::<0, 4, 1, 5>(b_u32, a_u32); // B1 A1 B2 A2
-             let t4 = u32x4_shuffle::<2, 6, 3, 7>(b_u32, a_u32); // B3 A3 B4 A4
-             
-             let p12 = u32x4_shuffle::<0, 2, 1, 3>(t1, t3); // R1 G1 B1 A1 ..
-             let p34 = u32x4_shuffle::<0, 2, 1, 3>(t2, t4);
-             
-             // Convert to u16 then u8
-             let p1234_u16 = u16x8_narrow_i32x4(p12, p34);
-             let result_u8 = u8x16_narrow_i16x8(p1234_u16, p1234_u16); // Only low part matters, duplicate
-             
-             v128_store(ptr as *mut v128, result_u8);
-             
+            let t1 = u32x4_shuffle::<0, 4, 1, 5>(p1_f, p2_f); // R1 R2 G1 G2
+            let t2 = u32x4_shuffle::<0, 4, 1, 5>(p3_f, p4_f); // R3 R4 G3 G4
+            let t3 = u32x4_shuffle::<2, 6, 3, 7>(p1_f, p2_f); // B1 B2 A1 A2
+            let t4 = u32x4_shuffle::<2, 6, 3, 7>(p3_f, p4_f); // B3 B4 A3 A4
+
+            let r_vec = u32x4_shuffle::<0, 1, 4, 5>(t1, t2); // R1 R2 R3 R4
+            let g_vec = u32x4_shuffle::<2, 3, 6, 7>(t1, t2); // G1 G2 G3 G4
+            let b_vec = u32x4_shuffle::<0, 1, 4, 5>(t3, t4); // B1 B2 B3 B4
+            let a_vec = u32x4_shuffle::<2, 3, 6, 7>(t3, t4); // A1 A2 A3 A4
+
+            // Normalize 0..1
+            let factor = f32x4_splat(1.0 / 255.0);
+            let r_n = f32x4_mul(r_vec, factor);
+            let g_n = f32x4_mul(g_vec, factor);
+            let b_n = f32x4_mul(b_vec, factor);
+
+            let (mut h, mut s, mut l) = rgb_to_hsl_v128(r_n, g_n, b_n);
+
+            let mut delta_h = zero;
+            let mut delta_s = zero;
+            let mut delta_l = zero;
+
+            for (center, s_hue, s_sat, s_lum) in &simdS {
+                let mut dist = f32x4_abs(f32x4_sub(h, *center));
+                let dist_gt_05 = f32x4_gt(dist, f32x4_splat(0.5));
+                // if dist > 0.5 { dist = 1.0 - dist }
+                dist = v128_bitselect(f32x4_sub(one, dist), dist, dist_gt_05);
+
+                let in_range = f32x4_lt(dist, width_factor);
+
+                // t = dist / width
+                let t = f32x4_div(dist, width_factor);
+                // weight = 1 - t*t*(3 - 2t)
+                let weight = f32x4_sub(
+                    one,
+                    f32x4_mul(f32x4_mul(t, t), f32x4_sub(three, f32x4_mul(two, t))),
+                );
+
+                let applied_weight = v128_bitselect(weight, zero, in_range);
+
+                delta_h = f32x4_add(delta_h, f32x4_mul(*s_hue, applied_weight));
+                delta_s = f32x4_add(delta_s, f32x4_mul(*s_sat, applied_weight));
+                delta_l = f32x4_add(delta_l, f32x4_mul(*s_lum, applied_weight));
+            }
+
+            // Wrap Hue
+            // h + delta_h * (30/360)
+            let h_shifted = f32x4_add(h, f32x4_mul(delta_h, hue_shift_scale));
+            // rem_euclid(1.0) for simd?
+            // v - floor(v) works for positive v. But shift can make it negative.
+            // x - floor(x).
+            let floor_h = f32x4_floor(h_shifted);
+            h = f32x4_sub(h_shifted, floor_h);
+
+            s = clamp_v128(f32x4_add(s, delta_s), zero, one);
+            l = clamp_v128(f32x4_add(l, delta_l), zero, one);
+
+            let (mut r_out, mut g_out, mut b_out) = hsl_to_rgb_v128(h, s, l);
+
+            let scale = f32x4_splat(255.0);
+            let r_final = f32x4_mul(r_out, scale);
+            let g_final = f32x4_mul(g_out, scale);
+            let b_final = f32x4_mul(b_out, scale);
+
+            let r_u32 = i32x4_trunc_sat_f32x4(r_final);
+            let g_u32 = i32x4_trunc_sat_f32x4(g_final);
+            let b_u32 = i32x4_trunc_sat_f32x4(b_final);
+            let a_u32 = i32x4_trunc_sat_f32x4(a_vec);
+
+            // Transpose Back to R1 G1 B1 A1 ...
+            // r: 0 1 2 3
+            // g: 4 5 6 7
+            // b: 8 9 10 11
+            // a: 12 13 14 15
+
+            let t1 = u32x4_shuffle::<0, 4, 1, 5>(r_u32, g_u32); // R1 G1 R2 G2
+            let t2 = u32x4_shuffle::<2, 6, 3, 7>(r_u32, g_u32); // R3 G3 R4 G4
+            let t3 = u32x4_shuffle::<0, 4, 1, 5>(b_u32, a_u32); // B1 A1 B2 A2
+            let t4 = u32x4_shuffle::<2, 6, 3, 7>(b_u32, a_u32); // B3 A3 B4 A4
+
+            let p12 = u32x4_shuffle::<0, 2, 1, 3>(t1, t3); // R1 G1 B1 A1 ..
+            let p34 = u32x4_shuffle::<0, 2, 1, 3>(t2, t4);
+
+            // Convert to u16 then u8
+            let p1234_u16 = u16x8_narrow_i32x4(p12, p34);
+            let result_u8 = u8x16_narrow_i16x8(p1234_u16, p1234_u16); // Only low part matters, duplicate
+
+            v128_store(ptr as *mut v128, result_u8);
+
             i += 16;
         }
-        
+
         // Scalar fallback for remaining pixels
         if i < total_len {
-             // Just reuse the ranges array which we defined above
-             // But we need the original loop logic.
-             // Easier to just finish simpler loop here without re-implementing exact math if possible.
-             // Or copy paste the inner loop body from scalar.
-             // To avoid duplication, we could call a scalar helper, but access to settings is cleaner here.
-             
-             // Scalar loop
-             for idx in (i..total_len).step_by(4) {
-                 let r_in = buffer[idx] as f32 / 255.0;
-                 let g_in = buffer[idx+1] as f32 / 255.0;
-                 let b_in = buffer[idx+2] as f32 / 255.0;
-                 
-                 let mut hsl = rgb_to_hsl([r_in, g_in, b_in]);
-                 let h = hsl[0];
-                 let mut delta_h = 0.0;
-                 let mut delta_s = 0.0;
-                 let mut delta_l = 0.0;
-                 
-                 for (center, s) in ranges.iter() {
-                     let mut dist = (h - center).abs();
-                     if dist > 0.5 { dist = 1.0 - dist; }
-                     let width = 60.0 / 360.0;
-                     if dist < width {
-                         let t = dist / width;
-                         let weight = 1.0 - t * t * (3.0 - 2.0 * t);
-                         delta_h += s.hue * weight;
-                         delta_s += s.saturation * weight;
-                         delta_l += s.luminance * weight;
-                     }
-                 }
-                 
-                 hsl[0] = (hsl[0] + delta_h * (30.0 / 360.0)).rem_euclid(1.0);
-                 hsl[1] = clamp(hsl[1] + delta_s, 0.0, 1.0);
-                 hsl[2] = clamp(hsl[2] + delta_l, 0.0, 1.0);
-                 
-                 let rgb_out = hsl_to_rgb(hsl);
-                 buffer[idx] = clamp_u8(rgb_out[0] * 255.0);
-                 buffer[idx+1] = clamp_u8(rgb_out[1] * 255.0);
-                 buffer[idx+2] = clamp_u8(rgb_out[2] * 255.0);
-             }
+            // Just reuse the ranges array which we defined above
+            // But we need the original loop logic.
+            // Easier to just finish simpler loop here without re-implementing exact math if possible.
+            // Or copy paste the inner loop body from scalar.
+            // To avoid duplication, we could call a scalar helper, but access to settings is cleaner here.
+
+            // Scalar loop
+            for idx in (i..total_len).step_by(4) {
+                let r_in = buffer[idx] as f32 / 255.0;
+                let g_in = buffer[idx + 1] as f32 / 255.0;
+                let b_in = buffer[idx + 2] as f32 / 255.0;
+
+                let mut hsl = rgb_to_hsl([r_in, g_in, b_in]);
+                let h = hsl[0];
+                let mut delta_h = 0.0;
+                let mut delta_s = 0.0;
+                let mut delta_l = 0.0;
+
+                for (center, s) in ranges.iter() {
+                    let mut dist = (h - center).abs();
+                    if dist > 0.5 {
+                        dist = 1.0 - dist;
+                    }
+                    let width = 60.0 / 360.0;
+                    if dist < width {
+                        let t = dist / width;
+                        let weight = 1.0 - t * t * (3.0 - 2.0 * t);
+                        delta_h += s.hue * weight;
+                        delta_s += s.saturation * weight;
+                        delta_l += s.luminance * weight;
+                    }
+                }
+
+                hsl[0] = (hsl[0] + delta_h * (30.0 / 360.0)).rem_euclid(1.0);
+                hsl[1] = clamp(hsl[1] + delta_s, 0.0, 1.0);
+                hsl[2] = clamp(hsl[2] + delta_l, 0.0, 1.0);
+
+                let rgb_out = hsl_to_rgb(hsl);
+                buffer[idx] = clamp_u8(rgb_out[0] * 255.0);
+                buffer[idx + 1] = clamp_u8(rgb_out[1] * 255.0);
+                buffer[idx + 2] = clamp_u8(rgb_out[2] * 255.0);
+            }
         }
-        
+
         return;
     }
 
     #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
     {
         // ... (Original scalar implementation)
-    // Range centers in Hue (0..1)
-    // Red (0), Orange (30), Yellow (60), Green (120), Aqua (180), Blue (240), Purple (270), Magenta (300)
-    // Actually standard 8-range is often:
-    // Red: 0/360
-    // Orange: 30
-    // Yellow: 60
-    // Green: 120
-    // Aqua/Cyan: 180
-    // Blue: 240
-    // Purple/Violet: 270
-    // Magenta: 300
+        // Range centers in Hue (0..1)
+        // Red (0), Orange (30), Yellow (60), Green (120), Aqua (180), Blue (240), Purple (270), Magenta (300)
+        // Actually standard 8-range is often:
+        // Red: 0/360
+        // Orange: 30
+        // Yellow: 60
+        // Green: 120
+        // Aqua/Cyan: 180
+        // Blue: 240
+        // Purple/Violet: 270
+        // Magenta: 300
 
-    let ranges = [
-        (0.0 / 360.0, &settings.red),
-        (30.0 / 360.0, &settings.orange),
-        (60.0 / 360.0, &settings.yellow),
-        (120.0 / 360.0, &settings.green),
-        (180.0 / 360.0, &settings.aqua),
-        (240.0 / 360.0, &settings.blue),
-        (270.0 / 360.0, &settings.purple),
-        (300.0 / 360.0, &settings.magenta),
-    ];
+        let ranges = [
+            (0.0 / 360.0, &settings.red),
+            (30.0 / 360.0, &settings.orange),
+            (60.0 / 360.0, &settings.yellow),
+            (120.0 / 360.0, &settings.green),
+            (180.0 / 360.0, &settings.aqua),
+            (240.0 / 360.0, &settings.blue),
+            (270.0 / 360.0, &settings.purple),
+            (300.0 / 360.0, &settings.magenta),
+        ];
 
-    for pixel in img.pixels_mut() {
-        let r_in = pixel[0] as f32 / 255.0;
-        let g_in = pixel[1] as f32 / 255.0;
-        let b_in = pixel[2] as f32 / 255.0;
-        let a = pixel[3];
+        for pixel in img.pixels_mut() {
+            let r_in = pixel[0] as f32 / 255.0;
+            let g_in = pixel[1] as f32 / 255.0;
+            let b_in = pixel[2] as f32 / 255.0;
+            let a = pixel[3];
 
-        let mut hsl = rgb_to_hsl([r_in, g_in, b_in]);
-        let h = hsl[0];
+            let mut hsl = rgb_to_hsl([r_in, g_in, b_in]);
+            let h = hsl[0];
 
-        let mut delta_h = 0.0;
-        let mut delta_s = 0.0;
-        let mut delta_l = 0.0;
+            let mut delta_h = 0.0;
+            let mut delta_s = 0.0;
+            let mut delta_l = 0.0;
 
-        for (center, s) in ranges.iter() {
-            // Hue distance with wrapping
-            let mut dist = (h - center).abs();
-            if dist > 0.5 {
-                dist = 1.0 - dist;
+            for (center, s) in ranges.iter() {
+                // Hue distance with wrapping
+                let mut dist = (h - center).abs();
+                if dist > 0.5 {
+                    dist = 1.0 - dist;
+                }
+
+                // Falloff: using a simple bell curve or linear falloff
+                // Width of influence. Typically ranges overlap.
+                // Let's use 60 deg (1/6) as total width of influence (30 deg each side).
+                let width = 60.0 / 360.0;
+                if dist < width {
+                    // Quadratic falloff for smoothness
+                    let t = dist / width;
+                    let weight = 1.0 - t * t * (3.0 - 2.0 * t); // Smoothstep-like falloff
+
+                    delta_h += s.hue * weight;
+                    delta_s += s.saturation * weight;
+                    delta_l += s.luminance * weight;
+                }
             }
 
-            // Falloff: using a simple bell curve or linear falloff
-            // Width of influence. Typically ranges overlap.
-            // Let's use 60 deg (1/6) as total width of influence (30 deg each side).
-            let width = 60.0 / 360.0;
-            if dist < width {
-                // Quadratic falloff for smoothness
-                let t = dist / width;
-                let weight = 1.0 - t * t * (3.0 - 2.0 * t); // Smoothstep-like falloff
+            // Apply adjustments
+            // Hue: wrap around
+            hsl[0] = (hsl[0] + delta_h * (30.0 / 360.0)).rem_euclid(1.0);
 
-                delta_h += s.hue * weight;
-                delta_s += s.saturation * weight;
-                delta_l += s.luminance * weight;
-            }
+            // Saturation/Luminosity: offset + clamp
+            hsl[1] = clamp(hsl[1] + delta_s, 0.0, 1.0);
+            hsl[2] = clamp(hsl[2] + delta_l, 0.0, 1.0);
+
+            let rgb_out = hsl_to_rgb(hsl);
+            pixel[0] = clamp_u8(rgb_out[0] * 255.0);
+            pixel[1] = clamp_u8(rgb_out[1] * 255.0);
+            pixel[2] = clamp_u8(rgb_out[2] * 255.0);
+            pixel[3] = a;
         }
-
-        // Apply adjustments
-        // Hue: wrap around
-        hsl[0] = (hsl[0] + delta_h * (30.0 / 360.0)).rem_euclid(1.0);
-
-        // Saturation/Luminosity: offset + clamp
-        hsl[1] = clamp(hsl[1] + delta_s, 0.0, 1.0);
-        hsl[2] = clamp(hsl[2] + delta_l, 0.0, 1.0);
-
-        let rgb_out = hsl_to_rgb(hsl);
-        pixel[0] = clamp_u8(rgb_out[0] * 255.0);
-        pixel[1] = clamp_u8(rgb_out[1] * 255.0);
-        pixel[2] = clamp_u8(rgb_out[2] * 255.0);
-        pixel[3] = a;
-    }
     }
 }
-
 
 pub(crate) fn apply_curves_in_place(img: &mut RgbaImage, settings: &CurvesSettings) {
     let master_lut = settings
@@ -2105,7 +2165,7 @@ pub(crate) fn apply_vignette_in_place(
     }
 
     let (width, height) = img.dimensions();
-    
+
     // Vignette is calculated based on full image center
     let center_x = full_width as f32 / 2.0;
     let center_y = full_height as f32 / 2.0;
@@ -2120,7 +2180,7 @@ pub(crate) fn apply_vignette_in_place(
 
     for y in 0..height {
         let global_y = offset_y + y as i32;
-        let dy = (global_y as f32 - center_y) / radius_max_y; 
+        let dy = (global_y as f32 - center_y) / radius_max_y;
         let dy_abs = dy.abs();
         let dy_sq = dy * dy;
 
@@ -2278,7 +2338,6 @@ pub(crate) fn apply_dehaze_in_place(img: &mut RgbaImage, settings: &DehazeSettin
     }
 }
 
-
 fn fast_box_blur_scalar(img: &RgbaImage, radius: u32) -> RgbaImage {
     let (width, height) = img.dimensions();
     if radius == 0 {
@@ -2431,10 +2490,10 @@ fn fast_box_blur_simd(img: &RgbaImage, radius: u32) -> RgbaImage {
                 let clamped_idx = idx.clamp(0, width as i32 - 1) as usize;
                 // v128_load32_zero loads 4 bytes (1 pixel) to lane 0
                 // We cast raw pointer to *const u8 for safety, although we are in unsafe block
-                 let ptr = src_row.as_ptr().add(clamped_idx * 4);
-                 let px = v128_load32_zero(ptr as *const u32);
-                 let px_u16 = u16x8_extend_low_u8x16(px);
-                 u32x4_extend_low_u16x8(px_u16)
+                let ptr = src_row.as_ptr().add(clamped_idx * 4);
+                let px = v128_load32_zero(ptr as *const u32);
+                let px_u16 = u16x8_extend_low_u8x16(px);
+                u32x4_extend_low_u16x8(px_u16)
             };
 
             for i in -r..=r {
@@ -2443,92 +2502,99 @@ fn fast_box_blur_simd(img: &RgbaImage, radius: u32) -> RgbaImage {
             }
 
             let write_pixel = |dst: &mut [u8], offset: usize, sum: v128, cnt: u32| {
-                 let factor = f32x4_splat(1.0 / cnt as f32);
-                 let sum_f = f32x4_convert_u32x4(sum);
-                 let avg_f = f32x4_mul(sum_f, factor);
-                 let avg_i = i32x4_trunc_sat_f32x4(avg_f); // u32x4 in disguise
-                 // Pack back to u8
-                 let avg_u16 = u16x8_narrow_i32x4(avg_i, avg_i);
-                 let avg_u8 = u8x16_narrow_i16x8(avg_u16, avg_u16);
-                 // Store low 4 bytes
-                 // v128_store32_lane(dst.as_ptr().add(offset) as *mut _, avg_u8, 0); // Lane index must be const
-                 let bytes = std::mem::transmute::<v128, [u8; 16]>(avg_u8);
-                 dst[offset] = bytes[0];
-                 dst[offset+1] = bytes[1];
-                 dst[offset+2] = bytes[2];
-                 dst[offset+3] = 255;
+                let factor = f32x4_splat(1.0 / cnt as f32);
+                let sum_f = f32x4_convert_u32x4(sum);
+                let avg_f = f32x4_mul(sum_f, factor);
+                let avg_i = i32x4_trunc_sat_f32x4(avg_f); // u32x4 in disguise
+                                                          // Pack back to u8
+                let avg_u16 = u16x8_narrow_i32x4(avg_i, avg_i);
+                let avg_u8 = u8x16_narrow_i16x8(avg_u16, avg_u16);
+                // Store low 4 bytes
+                // v128_store32_lane(dst.as_ptr().add(offset) as *mut _, avg_u8, 0); // Lane index must be const
+                let bytes = std::mem::transmute::<v128, [u8; 16]>(avg_u8);
+                dst[offset] = bytes[0];
+                dst[offset + 1] = bytes[1];
+                dst[offset + 2] = bytes[2];
+                dst[offset + 3] = 255;
             };
 
             write_pixel(dst_row, 0, sum_v, count);
 
             for x in 1..width {
-                 let out_idx = x as i32 - r - 1;
-                 let in_idx = x as i32 + r;
+                let out_idx = x as i32 - r - 1;
+                let in_idx = x as i32 + r;
 
-                 let p_out = load_pixel(out_idx);
-                 let p_in = load_pixel(in_idx);
+                let p_out = load_pixel(out_idx);
+                let p_in = load_pixel(in_idx);
 
-                 sum_v = u32x4_sub(sum_v, p_out);
-                 sum_v = u32x4_add(sum_v, p_in);
+                sum_v = u32x4_sub(sum_v, p_out);
+                sum_v = u32x4_add(sum_v, p_in);
 
-                 write_pixel(dst_row, (x as usize) * 4, sum_v, count);
+                write_pixel(dst_row, (x as usize) * 4, sum_v, count);
             }
         }
 
         // Vertical
         let mut v_blur_vec = vec![0u8; (width * height * 4) as usize];
         // h_blur_vec is source now
-        
+
         for x in 0..width {
-             let mut sum_v = u32x4_splat(0);
-             let mut count = 0u32;
+            let mut sum_v = u32x4_splat(0);
+            let mut count = 0u32;
 
-             let load_pixel_xy = |ix: u32, iy: i32| -> v128 {
-                 let clamped_y = iy.clamp(0, height as i32 - 1) as usize;
-                 let off = (clamped_y * width as usize + ix as usize) * 4;
-                 let ptr = h_blur_vec.as_ptr().add(off);
-                 let px = v128_load32_zero(ptr as *const u32);
-                 let px_u16 = u16x8_extend_low_u8x16(px);
-                 u32x4_extend_low_u16x8(px_u16)
-             };
-
-             for i in -r..=r {
-                 sum_v = u32x4_add(sum_v, load_pixel_xy(x, i));
-                 count += 1;
-             }
-             
-             let write_pixel_v = |dst: &mut [u8], offset: usize, sum: v128, cnt: u32, orig_alpha: u8| {
-                 let factor = f32x4_splat(1.0 / cnt as f32);
-                 let sum_f = f32x4_convert_u32x4(sum);
-                 let avg_f = f32x4_mul(sum_f, factor);
-                 let avg_i = i32x4_trunc_sat_f32x4(avg_f);
-                 let avg_u16 = u16x8_narrow_i32x4(avg_i, avg_i);
-                 let avg_u8 = u8x16_narrow_i16x8(avg_u16, avg_u16);
-                 let bytes = std::mem::transmute::<v128, [u8; 16]>(avg_u8);
-                 dst[offset] = bytes[0];
-                 dst[offset+1] = bytes[1];
-                 dst[offset+2] = bytes[2];
-                 dst[offset+3] = orig_alpha;
+            let load_pixel_xy = |ix: u32, iy: i32| -> v128 {
+                let clamped_y = iy.clamp(0, height as i32 - 1) as usize;
+                let off = (clamped_y * width as usize + ix as usize) * 4;
+                let ptr = h_blur_vec.as_ptr().add(off);
+                let px = v128_load32_zero(ptr as *const u32);
+                let px_u16 = u16x8_extend_low_u8x16(px);
+                u32x4_extend_low_u16x8(px_u16)
             };
+
+            for i in -r..=r {
+                sum_v = u32x4_add(sum_v, load_pixel_xy(x, i));
+                count += 1;
+            }
+
+            let write_pixel_v =
+                |dst: &mut [u8], offset: usize, sum: v128, cnt: u32, orig_alpha: u8| {
+                    let factor = f32x4_splat(1.0 / cnt as f32);
+                    let sum_f = f32x4_convert_u32x4(sum);
+                    let avg_f = f32x4_mul(sum_f, factor);
+                    let avg_i = i32x4_trunc_sat_f32x4(avg_f);
+                    let avg_u16 = u16x8_narrow_i32x4(avg_i, avg_i);
+                    let avg_u8 = u8x16_narrow_i16x8(avg_u16, avg_u16);
+                    let bytes = std::mem::transmute::<v128, [u8; 16]>(avg_u8);
+                    dst[offset] = bytes[0];
+                    dst[offset + 1] = bytes[1];
+                    dst[offset + 2] = bytes[2];
+                    dst[offset + 3] = orig_alpha;
+                };
 
             // Write (x, 0)
             let orig_px_0 = img.get_pixel(x, 0);
-             write_pixel_v(&mut v_blur_vec, (x as usize) * 4, sum_v, count, orig_px_0[3]);
+            write_pixel_v(
+                &mut v_blur_vec,
+                (x as usize) * 4,
+                sum_v,
+                count,
+                orig_px_0[3],
+            );
 
-             for y in 1..height {
-                 let out_idx = y as i32 - r - 1;
-                 let in_idx = y as i32 + r;
+            for y in 1..height {
+                let out_idx = y as i32 - r - 1;
+                let in_idx = y as i32 + r;
 
-                 let p_out = load_pixel_xy(x, out_idx);
-                 let p_in = load_pixel_xy(x, in_idx);
-                 
-                 sum_v = u32x4_sub(sum_v, p_out);
-                 sum_v = u32x4_add(sum_v, p_in);
+                let p_out = load_pixel_xy(x, out_idx);
+                let p_in = load_pixel_xy(x, in_idx);
 
-                 let offset = (y as usize * width as usize + x as usize) * 4;
-                 let orig_px = img.get_pixel(x, y);
-                 write_pixel_v(&mut v_blur_vec, offset, sum_v, count, orig_px[3]);
-             }
+                sum_v = u32x4_sub(sum_v, p_out);
+                sum_v = u32x4_add(sum_v, p_in);
+
+                let offset = (y as usize * width as usize + x as usize) * 4;
+                let orig_px = img.get_pixel(x, y);
+                write_pixel_v(&mut v_blur_vec, offset, sum_v, count, orig_px[3]);
+            }
         }
 
         RgbaImage::from_raw(width, height, v_blur_vec).unwrap()
@@ -2917,7 +2983,6 @@ mod tests {
         };
 
         apply_vignette_in_place(&mut img, &settings, 0, 0, width, height);
-
 
         let center = img.get_pixel(width / 2, height / 2);
         let corner = img.get_pixel(0, 0);

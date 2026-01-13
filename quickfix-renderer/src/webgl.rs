@@ -795,7 +795,12 @@ impl Renderer for WebGlRenderer {
         self.ensure_initialized(None)
     }
 
-    async fn set_lut(&mut self, _id: Option<&str>, data: &[f32], size: u32) -> Result<(), RendererError> {
+    async fn set_lut(
+        &mut self,
+        _id: Option<&str>,
+        data: &[f32],
+        size: u32,
+    ) -> Result<(), RendererError> {
         // We clone valid data into our cache
         self.lut_cache = Some((data.to_vec(), size));
         self.lut_dirty = true;

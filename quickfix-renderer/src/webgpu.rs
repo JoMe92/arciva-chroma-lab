@@ -57,7 +57,7 @@ pub struct WebGpuRenderer {
     lut_sampler: Option<wgpu::Sampler>,
     default_lut_texture: Option<wgpu::Texture>,
     curves_sampler: Option<wgpu::Sampler>,
-    
+
     // Cache
     source_textures: std::collections::HashMap<String, wgpu::Texture>,
 }
@@ -350,7 +350,12 @@ impl Renderer for WebGpuRenderer {
         self.ensure_initialized().await
     }
 
-    async fn set_lut(&mut self, _id: Option<&str>, data: &[f32], size: u32) -> Result<(), RendererError> {
+    async fn set_lut(
+        &mut self,
+        _id: Option<&str>,
+        data: &[f32],
+        size: u32,
+    ) -> Result<(), RendererError> {
         self.ensure_initialized().await?;
         let device = self.device.as_ref().unwrap();
         let queue = self.queue.as_ref().unwrap();
@@ -409,11 +414,11 @@ impl Renderer for WebGpuRenderer {
         // Upload Source Texture or Reuse Cached
         // We need an owned Option to hold the transient texture if created
         let transient_texture;
-        
+
         // Decide which texture to use
         let src_texture = if let Some(id) = _source_id {
             if !self.source_textures.contains_key(id) {
-                 let tex = device.create_texture_with_data(
+                let tex = device.create_texture_with_data(
                     queue,
                     &wgpu::TextureDescriptor {
                         label: Some(&format!("Source Texture {}", id)),
@@ -437,8 +442,8 @@ impl Renderer for WebGpuRenderer {
             // Now retrieve reference
             self.source_textures.get(id).unwrap()
         } else {
-             // Create transient
-             transient_texture = device.create_texture_with_data(
+            // Create transient
+            transient_texture = device.create_texture_with_data(
                 queue,
                 &wgpu::TextureDescriptor {
                     label: Some("Source Texture"),
