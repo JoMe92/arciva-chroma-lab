@@ -253,6 +253,7 @@ export class QuickFixRenderer {
   backend: string;
   process_frame(data: Uint8Array, width: number, height: number, adjustments: QuickFixAdjustments, options?: ProcessOptions): Promise<FrameResult>;
   render_to_canvas(data: Uint8Array, width: number, height: number, adjustments: QuickFixAdjustments, canvas: HTMLCanvasElement): Promise<void>;
+  final_render(data: Uint8Array, width: number, height: number, adjustments: QuickFixAdjustments): Promise<FrameResult>;
   set_lut(lut: LutResult): Promise<void>;
 }
 
@@ -512,6 +513,7 @@ impl Renderer for CpuRenderer {
 pub struct QuickFixRenderer {
     renderer: Box<dyn Renderer>,
     backend_name: String,
+    lut_cache: Option<(Vec<f32>, u32)>,
 }
 
 #[wasm_bindgen]
@@ -533,6 +535,7 @@ impl QuickFixRenderer {
                 return Ok(QuickFixRenderer {
                     renderer: Box::new(renderer),
                     backend_name: "webgpu".to_string(),
+                    lut_cache: None,
                 });
             } else if force == Some("webgpu") {
                 return Err(JsValue::from_str("WebGPU forced but failed to initialize"));
@@ -547,6 +550,7 @@ impl QuickFixRenderer {
                 return Ok(QuickFixRenderer {
                     renderer: Box::new(renderer),
                     backend_name: "webgl2".to_string(),
+                    lut_cache: None,
                 });
             } else if force == Some("webgl2") {
                 return Err(JsValue::from_str("WebGL2 forced but failed to initialize"));
@@ -558,6 +562,7 @@ impl QuickFixRenderer {
             return Ok(QuickFixRenderer {
                 renderer: Box::new(CpuRenderer { lut: None }),
                 backend_name: "cpu".to_string(),
+                lut_cache: None,
             });
         }
 
@@ -618,6 +623,9 @@ impl QuickFixRenderer {
             .set_lut(&lut.data, lut.size)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            
+        // Cache for CPU final export
+        self.lut_cache = Some((lut.data, lut.size));
         Ok(())
     }
 
@@ -636,6 +644,62 @@ impl QuickFixRenderer {
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(())
+    }
+
+    pub async fn final_render(
+        &mut self,
+        data: &[u8],
+        width: u32,
+        height: u32,
+        adjustments: JsValue,
+    ) -> Result<FrameResult, JsValue> {
+        let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
+        
+         // Debug Log
+        use web_sys::console;
+        console::log_1(&"WASM: Starting final_render (tiled)".into());
+
+        // Extract LUT if available in CPU renderer or passed separately? 
+        // Currently final_render doesn't support WebGPU/WebGL backends easily because they are coupled to context.
+        // It makes sense to run final_render on CPU to avoid GPU limits for huge exports, or implementing tiled GPU usage.
+        // Given the requirement "process full-resolution... without crashing", CPU tiling is safest.
+        
+        // We'll borrow LUT from the renderer if it's a CpuRenderer, or we might need to properly pass it.
+        // But `self.renderer` is a trait object.
+        // Actually, we can just strictly use the CPU implementation for final export for now.
+        // Or we should update the Renderer trait to support `final_render`.
+        // Simplest: Call operations::final_render_tiled directly here.
+        // But what about LUT?
+        // We can expose LUT getter in Renderer trait or just ignore LUT for now if not critical, OR better:
+        // Assume user passed LUT in `adjustments.lut` but the DATA is separate.
+        // The `QuickFixRenderer` has a `set_lut` method.
+        // But `operations::final_render_tiled` takes `lut_buffer`.
+        // We don't have easy access to the LUT stored inside `Box<dyn Renderer>`.
+        // But wait, `CpuRenderer` has `lut` field.
+        // If we cast `self.renderer` to `CpuRenderer`, we can get it.
+        // But if `self.renderer` is `WebGpuRenderer`, the LUT is in a texture.
+        // So for `final_render`, we might need the user to re-supply the LUT or cache it in `QuickFixRenderer`.
+        
+        // Strategy: Add `lut_cache` to `QuickFixRenderer` struct in `lib.rs`!
+        // When `set_lut` is called, store it there too.
+        
+        // For now, let's implement the method and use a workaround or fix the struct.
+        // I will just modify the struct fields in a moment.
+        
+        // Use cached LUT
+        let lut_ref = self.lut_cache.as_ref().map(|(d, s)| (d.as_slice(), *s));
+        
+        let (res, w, h) = operations::final_render_tiled(data, width, height, &adjustments, lut_ref)
+             .map_err(|e| JsValue::from_str(&e))?;
+             
+        let histogram = operations::compute_histogram(&res);
+
+        Ok(FrameResult {
+            data: res,
+            width: w,
+            height: h,
+            histogram,
+        })
     }
 }
 

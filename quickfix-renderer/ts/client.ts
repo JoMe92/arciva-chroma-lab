@@ -44,6 +44,14 @@ export class QuickFixClient {
                     this.pendingRequests.delete(requestId);
                 }
                 break;
+            case 'FINAL_RENDER_READY':
+                const { requestId: fReqId, data, width: fW, height: fH } = msg.payload;
+                const fResolver = this.pendingRequests.get(fReqId);
+                if (fResolver) {
+                    fResolver.resolve({ data: new Uint8Array(data), width: fW, height: fH });
+                    this.pendingRequests.delete(fReqId);
+                }
+                break;
             case 'ERROR':
                 const { requestId: errReqId, error } = msg.payload;
                 if (errReqId && this.pendingRequests.has(errReqId)) {
@@ -140,6 +148,40 @@ export class QuickFixClient {
 
             this.worker.postMessage({
                 type: 'RENDER',
+                payload: { requestId, imageData: imageData || undefined, width, height, adjustments }
+            } as WorkerMessage, transfer);
+        });
+    }
+
+    /**
+     * Sends a final high-res render request to the worker using tiling.
+     * @param imageData - The input image data.
+     * @param width - Image width.
+     * @param height - Image height.
+     * @param adjustments - The adjustments to apply.
+     * @returns A promise resolving to the raw pixel data.
+     */
+    finalRender(
+        imageData: ImageBitmap | ArrayBuffer | null,
+        width: number,
+        height: number,
+        adjustments: QuickFixAdjustments
+    ): Promise<{ data: Uint8Array, width: number, height: number }> {
+        const requestId = this.nextRequestId++;
+
+        return new Promise((resolve, reject) => {
+            this.pendingRequests.set(requestId, { resolve, reject });
+
+            const transfer: Transferable[] = [];
+            if (imageData instanceof ArrayBuffer) {
+                transfer.push(imageData);
+            }
+            if (imageData instanceof ImageBitmap) {
+                transfer.push(imageData);
+            }
+
+            this.worker.postMessage({
+                type: 'FINAL_RENDER',
                 payload: { requestId, imageData: imageData || undefined, width, height, adjustments }
             } as WorkerMessage, transfer);
         });

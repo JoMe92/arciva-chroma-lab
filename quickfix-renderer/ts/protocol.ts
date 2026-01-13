@@ -7,6 +7,7 @@ export type WorkerMessage =
     | { type: 'INIT'; payload: { rendererOptions: RendererOptions } }
     | { type: 'SET_IMAGE'; payload: { imageData: ImageBitmap | ArrayBuffer; width: number; height: number } }
     | { type: 'RENDER'; payload: { imageData?: ImageBitmap | ArrayBuffer; width: number; height: number; adjustments: QuickFixAdjustments; requestId: number } }
+    | { type: 'FINAL_RENDER'; payload: { imageData?: ImageBitmap | ArrayBuffer; width: number; height: number; adjustments: QuickFixAdjustments; requestId: number } }
     | { type: 'CANCEL'; payload: { requestId: number } }
     | { type: 'DISPOSE' }
     | { type: 'UPLOAD_LUT'; payload: { content: string; extension: string } };
@@ -17,4 +18,5 @@ export type WorkerMessage =
 export type WorkerResponse =
     | { type: 'INIT_RESULT'; payload: { success: true; backend: string } }
     | { type: 'FRAME_READY'; payload: { requestId: number; imageBitmap: ImageBitmap | ArrayBuffer; width: number; height: number; timing: number } }
+    | { type: 'FINAL_RENDER_READY'; payload: { requestId: number; data: ArrayBuffer; width: number; height: number } }
     | { type: 'ERROR'; payload: { requestId?: number; error: string } };

@@ -80,6 +80,63 @@ ctx.onmessage = async (e: MessageEvent<WorkerMessage>) => {
                 }
                 break;
 
+            case 'FINAL_RENDER':
+                if (!renderer) throw new Error("Renderer not initialized");
+
+                const { requestId: fReqId, imageData: fImgData, width: fW, height: fH, adjustments: fAdj } = msg.payload;
+
+                // Simple Cancellation check
+                if (fReqId < latestRequestId) {
+                    return;
+                }
+                // Don't update latestRequestId for final render? It's a parallel/long running task?
+                // Actually, export acts as a render. If user changes sliders during export, we probably want to cancel export?
+                // Or maybe export blocking?
+                // Let's assume it respects same ID.
+                latestRequestId = fReqId;
+
+                // Determine which image data to use
+                let fData: Uint8Array;
+                if (fImgData) {
+                    if (fImgData instanceof ImageBitmap) {
+                        const osc = new OffscreenCanvas(fW, fH);
+                        const osCtx = osc.getContext('2d');
+                        if (!osCtx) throw new Error("Could not get OffscreenCanvas context");
+                        osCtx.drawImage(fImgData, 0, 0);
+                        const id = osCtx.getImageData(0, 0, fW, fH);
+                        fData = new Uint8Array(id.data.buffer);
+                    } else {
+                        fData = new Uint8Array(fImgData as ArrayBuffer);
+                    }
+                } else if (sourceImage) {
+                    fData = sourceImage;
+                } else {
+                    throw new Error("No image data provided and no source image set");
+                }
+
+                const fResult = await renderer.final_render(fData, fW, fH, fAdj);
+
+                if (fReqId < latestRequestId) {
+                    fResult.free();
+                    return;
+                }
+
+                const fResData = fResult.data;
+                const fResBuffer = fResData.buffer as ArrayBuffer;
+
+                const fResponse: WorkerResponse = {
+                    type: 'FINAL_RENDER_READY',
+                    payload: {
+                        requestId: fReqId,
+                        data: fResBuffer,
+                        width: fResult.width, // Should match fW usually, unless crop logic in WASM changed it (Wait, final_render IS crop aware)
+                        height: fResult.height
+                    }
+                };
+                ctx.postMessage(fResponse, [fResBuffer]);
+                fResult.free();
+                break;
+
             case 'RENDER':
                 if (!renderer) throw new Error("Renderer not initialized");
 

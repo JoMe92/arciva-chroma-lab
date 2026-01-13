@@ -100,6 +100,9 @@ pub fn process_frame_internal(
     if let Some(hsl) = &adjustments.hsl {
         apply_hsl_in_place(&mut img, hsl);
     }
+    
+    // Get dimensions for vignette/others
+    let (w, h) = img.dimensions();
 
     // 7.5 Split Toning
     if let Some(st) = &adjustments.split_toning {
@@ -123,7 +126,7 @@ pub fn process_frame_internal(
 
     // 8.5 Vignette
     if let Some(vignette) = &adjustments.vignette {
-        apply_vignette_in_place(&mut img, vignette);
+        apply_vignette_in_place(&mut img, vignette, 0, 0, w, h);
     }
 
     // 8.6 Sharpen
@@ -133,13 +136,310 @@ pub fn process_frame_internal(
 
     // 9. Grain
     if let Some(grain) = &adjustments.grain {
-        apply_grain_in_place(&mut img, grain);
+        apply_grain_in_place(&mut img, grain, 0, 0);
     }
 
-    let (w, h) = img.dimensions();
     let raw = img.into_raw();
     let histogram = compute_histogram(&raw);
     Ok((raw, w, h, histogram))
+}
+
+pub fn final_render_tiled(
+    data: &[u8],
+    source_width: u32,
+    source_height: u32,
+    adjustments: &QuickFixAdjustments,
+    lut_buffer: Option<(&[f32], u32)>,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    // 1. Calculate final dimensions (Reverse of Crop logic to determine size)
+    // Actually, we need to handle the Geometric pipeline to know the final size.
+    // Distortion: Keeps size.
+    // Geometry: Keeps size.
+    // Crop: Changes logic based on rotation/crop rect.
+    
+    // We'll emulate the size calculation logic
+    let mut final_w = source_width;
+    let mut final_h = source_height;
+
+    // Step 2b+c: Crop/Rotate size calculation
+    if let Some(crop) = &adjustments.crop {
+        if let Some(rot) = crop.rotation {
+             if rot.abs() > 1e-5 {
+                  // Rotation logic in apply_crop_rotate keeps size same! 
+                  // "let mut rotated = RgbaImage::new(w, h);"
+                  // So rotation doesn't change size in this implementation.
+             }
+        }
+        
+        let (w, h) = (final_w, final_h);
+        
+        if let Some(rect) = &crop.rect {
+             // Explicit rect
+            let rx = clamp(rect.x, 0.0, 1.0);
+            let ry = clamp(rect.y, 0.0, 1.0);
+            let rw = clamp(rect.width, 0.0, 1.0 - rx);
+            let rh = clamp(rect.height, 0.0, 1.0 - ry);
+            if rw > 0.0 && rh > 0.0 {
+                 final_w = max(1, (w as f32 * rw).round() as u32);
+                 final_h = max(1, (h as f32 * rh).round() as u32);
+            }
+        } else if let Some(ar) = crop.aspect_ratio {
+             if ar > 0.0 {
+                let current_ratio = w as f32 / h as f32;
+                if (current_ratio - ar).abs() > 1e-3 {
+                    if current_ratio > ar {
+                         final_w = (h as f32 * ar).round() as u32;
+                    } else {
+                         final_h = (w as f32 / ar).round() as u32;
+                    }
+                }
+             }
+        }
+    }
+
+    // Allocate final buffer
+    let mut result_buffer = vec![0u8; (final_w * final_h * 4) as usize];
+    
+    // Convert source to image for random access
+    // Note: This allocation is unavoidable unless we use raw pointers/unsafe heavily for the source.
+    let source_img = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_vec(source_width, source_height, data.to_vec())
+          .ok_or("Invalid source buffer")?;
+          
+    // Tiling config
+    let tile_size: u32 = 512;
+    let padding: i32 = 128; // Covers clarity(100) + sharpen(approx)
+
+    let d_matrix = if let Some(geo) = &adjustments.geometry {
+        let v = clamp(geo.vertical.unwrap_or(0.0), -1.0, 1.0);
+        let h = clamp(geo.horizontal.unwrap_or(0.0), -1.0, 1.0);
+        if v.abs() > 1e-5 || h.abs() > 1e-5 {
+             let corners = crate::geometry::calculate_distortion_state(v, h);
+             Some(crate::geometry::calculate_homography_from_unit_square(&corners))
+        } else {
+             None
+        }
+    } else {
+        None
+    };
+    
+    // Rotate helpers
+    let (cos_a, sin_a, src_cx, src_cy) = if let Some(crop) = &adjustments.crop {
+        if let Some(rot) = crop.rotation {
+            let angle_rad = -rot.to_radians();
+            (angle_rad.cos(), angle_rad.sin(), source_width as f32 / 2.0, source_height as f32 / 2.0)
+        } else {
+            (1.0, 0.0, source_width as f32 / 2.0, source_height as f32 / 2.0)
+        }
+    } else {
+         (1.0, 0.0, source_width as f32 / 2.0, source_height as f32 / 2.0)
+    };
+    
+    // Calculate crop offset in the "rotated/geometry" space
+    let (crop_off_x, crop_off_y) = if let Some(crop) = &adjustments.crop {
+         let w = source_width; 
+         let h = source_height;
+         if let Some(rect) = &crop.rect {
+            ((w as f32 * rect.x).round() as i32, (h as f32 * rect.y).round() as i32)
+         } else if let Some(ar) = crop.aspect_ratio {
+             if ar > 0.0 {
+                 let current_ratio = w as f32 / h as f32;
+                 if (current_ratio - ar).abs() > 1e-3 {
+                      let (nw, nh) = if current_ratio > ar {
+                           ((h as f32 * ar).round() as u32, h)
+                      } else {
+                           (w, (w as f32 / ar).round() as u32)
+                      };
+                      (((w - nw) / 2) as i32, ((h - nh) / 2) as i32)
+                 } else { (0,0) }
+             } else { (0,0) }
+         } else { (0,0) }
+    } else { (0,0) };
+    // step_by requires usize
+    for y in (0..final_h).step_by(tile_size as usize) {
+        for x in (0..final_w).step_by(tile_size as usize) {
+            let limit_w = std::cmp::min(tile_size, final_w - x);
+            let limit_h = std::cmp::min(tile_size, final_h - y);
+            
+            // Define padded region in Final Image Frame
+            let pad_x = x as i32 - padding;
+            let pad_y = y as i32 - padding;
+            let pad_w = limit_w as i32 + padding * 2;
+            let pad_h = limit_h as i32 + padding * 2;
+            
+            // ...
+            
+            // We need to iterate this padded region, mapping each pixel back to source
+            // The mapping pipeline: 
+            // Final(px, py) -> Rotated(rx, ry) -> Geometry(gx, gy) -> Distorted(dx, dy) -> Source(sx, sy)
+            
+            let mut tile_buffer = RgbaImage::new(pad_w as u32, pad_h as u32);
+            
+            for ty in 0..pad_h {
+                for tx in 0..pad_w {
+                    let global_out_x = pad_x + tx;
+                    let global_out_y = pad_y + ty;
+                    
+                    // 1. Map Final -> Rotated (Reverse Crop)
+                    // Rotated Space has same origin, just offset by the crop.
+                    let r_x = global_out_x + crop_off_x;
+                    let r_y = global_out_y + crop_off_y;
+                    
+                    // 2. Map Rotated -> Geometry Output (Reverse Rotation)
+                    // Rotation is around center of image.
+                    // Image Size is Source Size.
+                    // output coords relative to center:
+                    let dx = r_x as f32 - src_cx;
+                    let dy = r_y as f32 - src_cy;
+                    
+                    // Backwards rotation (dest -> src)
+                    // src_x = x * cos - y * sin (if mapping dest to source for "Rotate by Theta")
+                    // In apply_crop_rotate: src_dx = dx * cos + dy * sin. (using -angle)
+                    // Here we use the precomputed cos/sin which were already for -angle.
+                    let g_u = dx * cos_a + dy * sin_a + src_cx;
+                    let g_v = -dx * sin_a + dy * cos_a + src_cy;
+                    
+                    // 3. Map Geometry Output -> Distorted Input (Reverse Geometry/Homography)
+                    // In apply_geometry: Output UV -> Matrix -> Source UV.
+                    // So we map g_u, g_v (which are pixels) to UV.
+                    let u_norm = g_u / source_width as f32;
+                    let v_norm = g_v / source_height as f32;
+                    
+                    let mut s_u = u_norm;
+                    let mut s_v = v_norm;
+                    
+                    if let Some(matrix) = &d_matrix {
+                        // Homography
+                        let src_x_h = matrix[0] * u_norm + matrix[1] * v_norm + matrix[2];
+                        let src_y_h = matrix[3] * u_norm + matrix[4] * v_norm + matrix[5];
+                        let src_z_h = matrix[6] * u_norm + matrix[7] * v_norm + matrix[8];
+                        
+                        if src_z_h.abs() > 1e-6 {
+                            s_u = src_x_h / src_z_h;
+                            s_v = src_y_h / src_z_h;
+                        } else {
+                            s_u = src_x_h;
+                            s_v = src_y_h;
+                        }
+                        
+                         // Handle flips in Geometry step?
+                        let flip_h = adjustments.geometry.as_ref().map_or(false, |g| g.flip_horizontal.unwrap_or(false));
+                        let flip_v = adjustments.geometry.as_ref().map_or(false, |g| g.flip_vertical.unwrap_or(false));
+                        if flip_h { s_u = 1.0 - s_u; }
+                        if flip_v { s_v = 1.0 - s_v; }
+                    } else {
+                         // Even without homography, flips might be active in "Geometry" settings
+                         let flip_h = adjustments.geometry.as_ref().map_or(false, |g| g.flip_horizontal.unwrap_or(false));
+                        let flip_v = adjustments.geometry.as_ref().map_or(false, |g| g.flip_vertical.unwrap_or(false));
+                        if flip_h { s_u = 1.0 - s_u; }
+                        if flip_v { s_v = 1.0 - s_v; }
+                    }
+                    
+                    // 4. Map Distorted -> Source (Reverse Lens Distortion)
+                    // apply_lens_distortion: OUTPUT UV -> Formula -> INPUT UV.
+                    let mut src_u_final = s_u;
+                    let mut src_v_final = s_v;
+                    
+                    if let Some(dist) = &adjustments.distortion {
+                        if dist.k1.abs() > 1e-5 || dist.k2.abs() > 1e-5 {
+                             let rel_x = s_u - 0.5;
+                             let rel_y = s_v - 0.5;
+                             let r2 = rel_x * rel_x + rel_y * rel_y;
+                             let scaling = 1.0 + dist.k1 * r2 + dist.k2 * r2 * r2;
+                             src_u_final = 0.5 + rel_x * scaling;
+                             src_v_final = 0.5 + rel_y * scaling;
+                        }
+                    }
+
+                    // 5. Sample
+                    let final_px = if src_u_final < 0.0 || src_u_final > 1.0 || src_v_final < 0.0 || src_v_final > 1.0 {
+                         Rgba([0,0,0,0])
+                    } else {
+                         sample_bicubic(&source_img, src_u_final * source_width as f32, src_v_final * source_height as f32)
+                    };
+                    
+                    tile_buffer.put_pixel(tx as u32, ty as u32, final_px);
+                }
+            }
+            
+            // Now we have the Geometrically correct padded tile.
+            // Apply effects
+            
+            if let Some(denoise) = &adjustments.denoise {
+               apply_denoise_in_place(&mut tile_buffer, denoise);
+            }
+            if let Some(exp) = &adjustments.exposure {
+                apply_exposure_in_place(&mut tile_buffer, exp);
+            }
+            if let Some(col) = &adjustments.color {
+                apply_color_balance_in_place(&mut tile_buffer, col);
+            }
+             if let Some(curves) = &adjustments.curves {
+                apply_curves_in_place(&mut tile_buffer, curves);
+            }
+            if let Some(hsl) = &adjustments.hsl {
+                apply_hsl_in_place(&mut tile_buffer, hsl);
+            }
+            if let Some(st) = &adjustments.split_toning {
+                apply_split_toning_in_place(&mut tile_buffer, st);
+            }
+            if let Some(dehaze) = &adjustments.dehaze {
+                apply_dehaze_in_place(&mut tile_buffer, dehaze);
+            }
+            if let Some(clarity) = &adjustments.clarity {
+                apply_clarity_in_place(&mut tile_buffer, clarity);
+            }
+            if let (Some(lut_settings), Some((lut_data, lut_size))) = (&adjustments.lut, lut_buffer) {
+                apply_lut_in_place(&mut tile_buffer, lut_data, lut_size, lut_settings);
+            }
+            
+            // Vignette needs Global coords: (pad_x, pad_y) are the global coords of the top-left of this tile.
+            if let Some(vignette) = &adjustments.vignette {
+                // Ensure we handle negative pad_x correctly?
+                // apply_vignette expects u32.
+                // We shouldn't actually start with negative pad_x in the buffer if we clamped?
+                // No, we loop tx 0..pad_w.
+                // pad_x can be negative (e.g. -128).
+                // So global_x = -128 + tx.
+                // apply_vignette_in_place takes (u32, u32).
+                // We should probably modify apply_vignette to take i32 offsets?
+                // Or just clamp inside?
+                // Actually, if we pass pad_x as i32, we can do the math inside.
+                apply_vignette_in_place(&mut tile_buffer, vignette, pad_x, pad_y, final_w, final_h);
+            }
+            
+            if let Some(sharpen) = &adjustments.sharpen {
+                apply_sharpen_in_place(&mut tile_buffer, sharpen);
+            }
+            
+            if let Some(grain) = &adjustments.grain {
+                 // Adjust grain similarly
+                apply_grain_in_place(&mut tile_buffer, grain, pad_x as u32, pad_y as u32);
+            }
+
+            // Copy valid region back to result buffer
+            // Valid region start in tile_buffer: (padding, padding)
+            // Dimensions: limit_w, limit_h
+            // Destination: (x, y)
+            for ly in 0..limit_h {
+                for lx in 0..limit_w {
+                     // Cast to u32 for get_pixel
+                     let px_u32 = lx + padding as u32;
+                     let py_u32 = ly + padding as u32;
+                     
+                     let tile_px = tile_buffer.get_pixel(px_u32, py_u32);
+                     let dest_x = x + lx;
+                     let dest_y = y + ly;
+                     let di = ((dest_y * final_w + dest_x) * 4) as usize;
+                     result_buffer[di] = tile_px[0];
+                     result_buffer[di+1] = tile_px[1];
+                     result_buffer[di+2] = tile_px[2];
+                     result_buffer[di+3] = tile_px[3];
+                }
+            }
+        }
+    }
+    
+    Ok((result_buffer, final_w, final_h))
 }
 
 // Bicubic interpolation helper
@@ -524,7 +824,12 @@ fn apply_color_balance_in_place(img: &mut RgbaImage, settings: &ColorSettings) {
     }
 }
 
-fn apply_grain_in_place(img: &mut RgbaImage, settings: &GrainSettings) {
+pub(crate) fn apply_grain_in_place(
+    img: &mut RgbaImage,
+    settings: &GrainSettings,
+    offset_x: u32,
+    offset_y: u32,
+) {
     if settings.amount <= 0.0 {
         return;
     }
@@ -535,32 +840,43 @@ fn apply_grain_in_place(img: &mut RgbaImage, settings: &GrainSettings) {
         _ => 1,
     };
 
-    let (width, height) = img.dimensions();
-    let noise_w = max(1, width.div_ceil(scale));
-    let noise_h = max(1, height.div_ceil(scale));
+    let (width, height) = img.dimensions(); // Local dimensions
 
     let sigma = clamp(settings.amount, 0.0, 1.0) * 25.0;
 
-    // Deterministic RNG
+    // Deterministic RNG setup
     let seed = settings.seed.unwrap_or(42);
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    
+    // Generate a tileable noise texture effectively
+    // To ensure consistency across tiles, we can't just generate a buffer of 'width/height'.
+    // We should treat the noise as a repeating texture or hash-based.
+    // Hash-based is expensive. Repeating a large buffer (e.g. 1024x1024) is a good compromise.
+    // 1024x1024 is enough to hide repetition for grain.
+    const NOISE_TILE_SIZE: usize = 1024;
+    let mut noise_tile = vec![0.0f32; NOISE_TILE_SIZE * NOISE_TILE_SIZE];
+    
     let normal = match Normal::new(0.0, sigma) {
         Ok(n) => n,
-        Err(_) => return, // Should not happen given check above, but safe fallback
+        Err(_) => return,
     };
-
-    // Generate noise buffer
-    let mut noise_buffer = vec![0.0f32; (noise_w * noise_h) as usize];
-    for x in noise_buffer.iter_mut() {
+    
+    for x in noise_tile.iter_mut() {
         *x = normal.sample(&mut rng);
     }
 
     // Apply noise
     for y in 0..height {
+        let global_y = offset_y + y;
+        let ny = global_y / scale;
+        
         for x in 0..width {
-            let nx = x / scale;
-            let ny = y / scale;
-            let noise_val = noise_buffer[(ny * noise_w + nx) as usize];
+            let global_x = offset_x + x;
+            let nx = global_x / scale;
+            
+            // Sample from tile
+            let tile_idx = ((ny as usize % NOISE_TILE_SIZE) * NOISE_TILE_SIZE) + (nx as usize % NOISE_TILE_SIZE);
+            let noise_val = noise_tile[tile_idx];
 
             let pixel = img.get_pixel_mut(x, y);
             let r = pixel[0] as f32 + noise_val;
@@ -1776,33 +2092,41 @@ pub(crate) fn apply_split_toning_in_place(img: &mut RgbaImage, settings: &SplitT
     }
 }
 
-pub(crate) fn apply_vignette_in_place(img: &mut RgbaImage, settings: &VignetteSettings) {
+pub(crate) fn apply_vignette_in_place(
+    img: &mut RgbaImage,
+    settings: &VignetteSettings,
+    offset_x: i32,
+    offset_y: i32,
+    full_width: u32,
+    full_height: u32,
+) {
     if settings.amount.abs() < 1e-4 {
         return;
     }
 
     let (width, height) = img.dimensions();
-    let center_x = width as f32 / 2.0;
-    let center_y = height as f32 / 2.0;
+    
+    // Vignette is calculated based on full image center
+    let center_x = full_width as f32 / 2.0;
+    let center_y = full_height as f32 / 2.0;
 
-    // Normalize coordinates to [0, 1] relative to center
     let radius_max_x = center_x;
     let radius_max_y = center_y;
 
     let roundness = clamp(settings.roundness, -1.0, 1.0);
-    // +1.0 = Rectangle, 0.0 = Oval
-
     let feather = clamp(settings.feather, 0.0, 1.0);
     let amount = clamp(settings.amount, -1.0, 1.0);
     let midpoint = clamp(settings.midpoint, 0.0, 1.0);
 
     for y in 0..height {
-        let dy = (y as f32 - center_y) / radius_max_y; // -1..1
+        let global_y = offset_y + y as i32;
+        let dy = (global_y as f32 - center_y) / radius_max_y; 
         let dy_abs = dy.abs();
         let dy_sq = dy * dy;
 
         for x in 0..width {
-            let dx = (x as f32 - center_x) / radius_max_x; // -1..1
+            let global_x = offset_x + x as i32;
+            let dx = (global_x as f32 - center_x) / radius_max_x;
             let dx_abs = dx.abs();
             let dx_sq = dx * dx;
 
@@ -1811,7 +2135,6 @@ pub(crate) fn apply_vignette_in_place(img: &mut RgbaImage, settings: &VignetteSe
             let dist_rect = dx_abs.max(dy_abs);
 
             let dist = if roundness >= 0.0 {
-                // Blend Oval -> Rect
                 dist_oval * (1.0 - roundness) + dist_rect * roundness
             } else {
                 dist_oval
@@ -1824,7 +2147,6 @@ pub(crate) fn apply_vignette_in_place(img: &mut RgbaImage, settings: &VignetteSe
             let t = (dist - low) / (high - low).max(1e-5);
             let t = clamp(t, 0.0, 1.0);
 
-            // Smoothstep
             let mask = t * t * (3.0 - 2.0 * t);
 
             if mask > 0.0 {
@@ -1839,13 +2161,11 @@ pub(crate) fn apply_vignette_in_place(img: &mut RgbaImage, settings: &VignetteSe
                 let mut b_out = b;
 
                 if amount < 0.0 {
-                    // Darken
                     let factor = 1.0 - mask * amount.abs();
                     r_out *= factor;
                     g_out *= factor;
                     b_out *= factor;
                 } else {
-                    // Lighten (White vignette)
                     let factor = mask * amount;
                     r_out = r_out + (1.0 - r_out) * factor;
                     g_out = g_out + (1.0 - g_out) * factor;
