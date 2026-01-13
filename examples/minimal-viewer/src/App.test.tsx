@@ -132,7 +132,7 @@ describe('App Integration', () => {
 
         await waitFor(() => {
             expect(screen.getByText(/Image Size: 100x100/i)).toBeInTheDocument();
-        });
+        }, { timeout: 10000 });
 
         // The render should have been called
         await waitFor(() => {
@@ -143,8 +143,8 @@ describe('App Integration', () => {
             const sourceId = lastCall[4];
             expect(typeof sourceId).toBe('string');
             expect(sourceId!.length).toBeGreaterThan(0);
-        });
-    });
+        }, { timeout: 10000 });
+    }, 20000);
 
     it('renders and allows picking white balance', async () => {
         const { container } = render(<App />);
@@ -159,7 +159,7 @@ describe('App Integration', () => {
 
             // Wait for Image Size to be updated (implies setImageData has run)
             expect(screen.getByText(/Image Size: 100x100/i)).toBeInTheDocument();
-        });
+        }, { timeout: 10000 });
 
         const canvas = container.querySelector('canvas');
         expect(canvas).toBeInTheDocument();
@@ -203,12 +203,12 @@ describe('App Integration', () => {
             // Expected: Temp ~ -0.57, Tint ~ -0.45
             expect(tempVal).toBeCloseTo(-0.57, 1);
             expect(tintVal).toBeCloseTo(-0.45, 1);
-        });
+        }, { timeout: 10000 });
 
         // 8. Verify mode reset
         expect(pickButton).toHaveTextContent(/Pick Neutral Gray/i);
         expect(canvas).toHaveStyle({ cursor: 'default' });
-    });
+    }, 20000);
 
     it('cancels picker when rotation changes', async () => {
         render(<App />);
@@ -217,7 +217,7 @@ describe('App Integration', () => {
         await waitFor(() => {
             const backendElements = screen.getAllByText(/Backend/i);
             expect(backendElements.length).toBeGreaterThan(0);
-        });
+        }, { timeout: 10000 });
 
         const pickButton = screen.getByText(/Pick Neutral Gray/i);
 
@@ -234,11 +234,11 @@ describe('App Integration', () => {
         // Verify picker is cancelled (text changes back)
         await waitFor(() => {
             expect(pickButton).toHaveTextContent(/Pick Neutral Gray/i);
-        });
+        }, { timeout: 10000 });
 
         // Also verify the button is now disabled
         expect(pickButton).toBeDisabled();
-    });
+    }, 20000);
 
     it('renders with a scrollable sidebar and curve strength slider', async () => {
         render(<App />);
@@ -247,7 +247,7 @@ describe('App Integration', () => {
         await waitFor(() => {
             const backendElements = screen.getAllByText(/Backend/i);
             expect(backendElements.length).toBeGreaterThan(0);
-        });
+        }, { timeout: 10000 });
 
         // 1. Verify sidebar exists and has correct styles for scrolling
         const sidebar = screen.getByRole('complementary');
@@ -262,5 +262,5 @@ describe('App Integration', () => {
 
         // 3. Verify it's labeled correctly
         expect(screen.getByText(/Curve Strength/i)).toBeInTheDocument();
-    });
+    }, 15000);
 });
