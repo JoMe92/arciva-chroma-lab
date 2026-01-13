@@ -62,6 +62,7 @@ struct Settings {
     padding3: f32,
     distortion_k1: f32,
     distortion_k2: f32,
+    hsl_enabled: f32,
     hsl: array<vec4<f32>, 8>,
 };
 
@@ -477,33 +478,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     color = vec4<f32>(mix(color.rgb, curved_color, settings.curves_intensity), color.a);
 
     // 5.2 HSL Tuning
-    var hsl = rgb_to_hsl(color.rgb);
-    let centers = array<f32, 8>(0.0, 30.0/360.0, 60.0/360.0, 120.0/360.0, 180.0/360.0, 240.0/360.0, 270.0/360.0, 300.0/360.0);
-    
-    var dH: f32 = 0.0;
-    var dS: f32 = 0.0;
-    var dL: f32 = 0.0;
-    
-    for (var i = 0; i < 8; i++) {
-        var dist = abs(hsl.x - centers[i]);
-        if (dist > 0.5) { dist = 1.0 - dist; }
+    if (settings.hsl_enabled > 0.5) {
+        var hsl = rgb_to_hsl(color.rgb);
+        let centers = array<f32, 8>(0.0, 30.0/360.0, 60.0/360.0, 120.0/360.0, 180.0/360.0, 240.0/360.0, 270.0/360.0, 300.0/360.0);
         
-        let width = 60.0 / 360.0;
-        if (dist < width) {
-            let t = dist / width;
-            let weight = 1.0 - t * t * (3.0 - 2.0 * t);
+        var dH: f32 = 0.0;
+        var dS: f32 = 0.0;
+        var dL: f32 = 0.0;
+        
+        for (var i = 0; i < 8; i++) {
+            var dist = abs(hsl.x - centers[i]);
+            if (dist > 0.5) { dist = 1.0 - dist; }
             
-            dH += settings.hsl[i].x * weight;
-            dS += settings.hsl[i].y * weight;
-            dL += settings.hsl[i].z * weight;
+            let width = 60.0 / 360.0;
+            if (dist < width) {
+                let t = dist / width;
+                let weight = 1.0 - t * t * (3.0 - 2.0 * t);
+                
+                dH += settings.hsl[i].x * weight;
+                dS += settings.hsl[i].y * weight;
+                dL += settings.hsl[i].z * weight;
+            }
         }
+        
+        hsl.x = (hsl.x + dH * (30.0 / 360.0)) % 1.0;
+        if (hsl.x < 0.0) { hsl.x += 1.0; }
+        hsl.y = clamp(hsl.y + dS, 0.0, 1.0);
+        hsl.z = clamp(hsl.z + dL, 0.0, 1.0);
+        color = vec4<f32>(hsl_to_rgb(hsl), color.a);
     }
-    
-    hsl.x = (hsl.x + dH * (30.0 / 360.0)) % 1.0;
-    if (hsl.x < 0.0) { hsl.x += 1.0; }
-    hsl.y = clamp(hsl.y + dS, 0.0, 1.0);
-    hsl.z = clamp(hsl.z + dL, 0.0, 1.0);
-    color = vec4<f32>(hsl_to_rgb(hsl), color.a);
 
     // 5.3 Split Toning
     if (settings.st_shadow_sat > 0.0 || settings.st_highlight_sat > 0.0) {
@@ -579,11 +582,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Python noise is Normal(0, sigma).
         // We should probably upload noise as centered around 0.5 or just add (noise - 0.5).
         // Let's assume texture is 0..1, representing -sigma..sigma?
-        // No, let's assume texture is raw noise values normalized.
-        // Easier: Texture contains pre-computed noise * 128 + 128.
-        // So (val - 0.5) * 2 * sigma.
-        
-        // Actually, let's just say the texture contains standard normal noise mapped to 0..1?
         // No, precision issues.
         // Let's say texture contains noise in -1..1 range (f32 texture) or 0..1 (unorm).
         // Let's assume 0..1 where 0.5 is 0.
@@ -659,6 +657,7 @@ uniform sampler2D u_curves;
 uniform float u_curves_intensity;
 uniform float u_distortion_k1;
 uniform float u_distortion_k2;
+uniform float u_hsl_enabled;
 uniform vec4 u_hsl[8]; // xyz = HSL adjustment, w = center hue
 uniform float u_st_shadow_hue;
 uniform float u_st_shadow_sat;
@@ -666,7 +665,10 @@ uniform float u_st_highlight_hue;
 uniform float u_st_highlight_sat;
 uniform float u_st_balance;
 
-// Helper: Cubic Hermite
+
+
+
+
 float cubic_hermite(float a, float b, float c, float d, float t) {
     float a_val = -a / 2.0 + (3.0 * b) / 2.0 - (3.0 * c) / 2.0 + d / 2.0;
     float b_val = a - (5.0 * b) / 2.0 + 2.0 * c - d / 2.0;
@@ -895,8 +897,7 @@ void main() {
         }
     }
     
-        return;
-    }
+
     
     // Distort UV
     uv = distort_uv(uv);
@@ -943,26 +944,29 @@ void main() {
     color.rgb = mix(color.rgb, curved_col, u_curves_intensity);
 
     // 5.2 HSL Tuning
-    vec3 hsl = rgb_to_hsl(color.rgb);
-    vec3 dHSL = vec3(0.0);
-    
-    for (int i = 0; i < 8; i++) {
-        float center = u_hsl[i].w;
-        float dist = abs(hsl.x - center);
-        if (dist > 0.5) dist = 1.0 - dist;
+    // 5.2 HSL Tuning
+    if (u_hsl_enabled > 0.5) {
+        vec3 hsl = rgb_to_hsl(color.rgb);
+        vec3 dHSL = vec3(0.0);
         
-        float width = 60.0 / 360.0;
-        if (dist < width) {
-            float t = dist / width;
-            float weight = 1.0 - t * t * (3.0 - 2.0 * t);
-            dHSL += u_hsl[i].xyz * weight;
+        for (int i = 0; i < 8; i++) {
+            float center = u_hsl[i].w;
+            float dist = abs(hsl.x - center);
+            if (dist > 0.5) dist = 1.0 - dist;
+            
+            float width = 60.0 / 360.0;
+            if (dist < width) {
+                float t = dist / width;
+                float weight = 1.0 - t * t * (3.0 - 2.0 * t);
+                dHSL += u_hsl[i].xyz * weight;
+            }
         }
+        
+        hsl.x = mod(hsl.x + dHSL.x * (30.0 / 360.0), 1.0);
+        hsl.y = clamp(hsl.y + dHSL.y, 0.0, 1.0);
+        hsl.z = clamp(hsl.z + dHSL.z, 0.0, 1.0);
+        color.rgb = hsl_to_rgb(hsl);
     }
-    
-    hsl.x = mod(hsl.x + dHSL.x * (30.0 / 360.0), 1.0);
-    hsl.y = clamp(hsl.y + dHSL.y, 0.0, 1.0);
-    hsl.z = clamp(hsl.z + dHSL.z, 0.0, 1.0);
-    color.rgb = hsl_to_rgb(hsl);
 
     // 5.3 Split Toning
     if (u_st_shadow_sat > 0.0 || u_st_highlight_sat > 0.0) {

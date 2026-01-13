@@ -710,6 +710,11 @@ impl WebGlRenderer {
             settings.distortion.as_ref().map(|d| d.k2).unwrap_or(0.0),
         );
 
+        gl.uniform_1_f32(
+            loc("u_hsl_enabled").as_ref(),
+            if settings.hsl.is_some() { 1.0 } else { 0.0 },
+        );
+
         // HSL
         if let Some(hsl) = &settings.hsl {
             let centers = [
