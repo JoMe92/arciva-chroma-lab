@@ -2916,7 +2916,8 @@ mod tests {
             feather: 0.5,
         };
 
-        apply_vignette_in_place(&mut img, &settings);
+        apply_vignette_in_place(&mut img, &settings, 0, 0, width, height);
+
 
         let center = img.get_pixel(width / 2, height / 2);
         let corner = img.get_pixel(0, 0);

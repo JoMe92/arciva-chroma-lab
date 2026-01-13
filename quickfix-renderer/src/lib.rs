@@ -928,4 +928,81 @@ mod tests {
         assert!((crop.x - 0.25).abs() < 1e-4);
         assert!((crop.y - 0.25).abs() < 1e-4);
     }
+
+    #[test]
+    fn test_cpu_renderer_lut_caching() {
+        // Instantiate CpuRenderer directly
+        let mut renderer = CpuRenderer {
+            luts: std::collections::HashMap::new(),
+            active_lut: None,
+        };
+
+        // LUT A: Red tint (R=1.0, G=0.0, B=0.0)
+        let mut lut_a = Vec::with_capacity(8 * 3);
+        for _ in 0..8 { lut_a.extend_from_slice(&[1.0, 0.0, 0.0]); }
+        
+        // LUT B: Blue tint (R=0.0, G=0.0, B=1.0)
+        let mut lut_b = Vec::with_capacity(8 * 3);
+        for _ in 0..8 { lut_b.extend_from_slice(&[0.0, 0.0, 1.0]); }
+
+        // 1. Upload LUTs using block_on since we don't have tokio runtime
+        futures::executor::block_on(async {
+            renderer.set_lut(Some("lut_a"), &lut_a, 2).await.unwrap();
+            renderer.set_lut(Some("lut_b"), &lut_b, 2).await.unwrap();
+        });
+
+        assert_eq!(renderer.luts.len(), 2);
+        assert_eq!(renderer.active_lut, Some("lut_b".to_string()));
+
+        // 2. Prepare test image (Medium Gray)
+        let input_data = vec![128, 128, 128, 255]; 
+        let width = 1;
+
+        // 3. Render with LUT A (Red) using id
+        let settings_a = QuickFixAdjustments {
+            lut: Some(Lut3DSettings {
+                intensity: 1.0,
+                tint: None,
+                external_id: Some("lut_a".to_string()),
+            }),
+            ..Default::default()
+        };
+
+        let (res_a, _) = futures::executor::block_on(renderer.render(&input_data, width, 1, &settings_a, None)).unwrap();
+        
+        assert!(res_a[0] > 200); // Red
+        assert!(res_a[1] < 50);  // Green
+        assert!(res_a[2] < 50);  // Blue
+
+        // 4. Render with LUT B (Blue) using id
+        let settings_b = QuickFixAdjustments {
+            lut: Some(Lut3DSettings {
+                intensity: 1.0,
+                tint: None,
+                external_id: Some("lut_b".to_string()),
+            }),
+            ..Default::default()
+        };
+
+        let (res_b, _) = futures::executor::block_on(renderer.render(&input_data, width, 1, &settings_b, None)).unwrap();
+        
+        assert!(res_b[0] < 50);  // Red
+        assert!(res_b[2] > 200); // Blue
+        
+        // 5. Render with Missing ID
+        let settings_c = QuickFixAdjustments {
+            lut: Some(Lut3DSettings {
+                intensity: 1.0,
+                tint: None,
+                external_id: Some("missing".to_string()),
+            }),
+            ..Default::default()
+        };
+        
+        let (res_c, _) = futures::executor::block_on(renderer.render(&input_data, width, 1, &settings_c, None)).unwrap();
+        // Should be original gray
+        assert!((res_c[0] as i32 - 128).abs() < 5);
+        assert!((res_c[1] as i32 - 128).abs() < 5);
+        assert!((res_c[2] as i32 - 128).abs() < 5);
+    }
 }

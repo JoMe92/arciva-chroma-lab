@@ -285,7 +285,6 @@ function App() {
 
         // Let's assume for now I pass a plain object and cast it.
         // The worker will read `.backend` from it.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const options = { backend } as any as RendererOptions;
 
         await clientRef.current!.init(options);
@@ -348,7 +347,6 @@ function App() {
 
     const render = async () => {
       setIsRendering(true);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const settings: any = { // Use any for now as TS types might not be updated in editor yet
         exposure: { exposure, contrast, highlights, shadows },
         color: { temperature: temp, tint },
