@@ -1096,7 +1096,8 @@ impl Renderer for WebGpuRenderer {
             _padding: 0.0,
             distortion_k1: settings.distortion.as_ref().map(|d| d.k1).unwrap_or(0.0),
             distortion_k2: settings.distortion.as_ref().map(|d| d.k2).unwrap_or(0.0),
-            _padding_align: 0.0,
+            hsl_enabled: if settings.hsl.is_some() { 1.0 } else { 0.0 },
+
             hsl: {
                 let mut hsl_data = [[0.0f32; 4]; 8];
                 let centers = [
