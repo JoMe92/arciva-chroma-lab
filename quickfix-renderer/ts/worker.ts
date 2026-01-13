@@ -3,7 +3,7 @@
  * Manages the WASM renderer instance and handles messages from the main thread.
  */
 
-import init, { QuickFixRenderer, init_panic_hook, RendererOptions, parse_lut } from '../pkg/quickfix_renderer';
+import init, { QuickFixRenderer, init_panic_hook, RendererOptions, parse_lut, ProcessOptions } from '../pkg/quickfix_renderer';
 import { WorkerMessage, WorkerResponse } from './protocol';
 
 const ctx: DedicatedWorkerGlobalScope = self as any;
@@ -140,7 +140,7 @@ ctx.onmessage = async (e: MessageEvent<WorkerMessage>) => {
             case 'RENDER':
                 if (!renderer) throw new Error("Renderer not initialized");
 
-                const { requestId, imageData, width, height, adjustments } = msg.payload;
+                const { requestId, imageData, width, height, adjustments, sourceId } = msg.payload;
 
                 // Cancellation check: if a newer request has come in since we started processing (or queued),
                 // we technically can't know easily without peeking the queue, but we can track "latest seen".
@@ -172,7 +172,10 @@ ctx.onmessage = async (e: MessageEvent<WorkerMessage>) => {
                     throw new Error("No image data provided and no source image set");
                 }
 
-                const result = await renderer.process_frame(data, width, height, adjustments);
+                // Create ProcessOptions using constructor
+                const procOpts = new ProcessOptions(undefined, sourceId);
+
+                const result = await renderer.process_frame(data, width, height, adjustments, procOpts);
                 const endTime = performance.now();
 
                 // Check cancellation again before sending back

@@ -129,7 +129,8 @@ export class QuickFixClient {
         imageData: ImageBitmap | ArrayBuffer | null,
         width: number,
         height: number,
-        adjustments: QuickFixAdjustments
+        adjustments: QuickFixAdjustments,
+        sourceId?: string
     ): Promise<{ imageBitmap: ImageBitmap | ArrayBuffer, width: number, height: number, timing: number }> {
         const requestId = this.nextRequestId++;
 
@@ -148,7 +149,7 @@ export class QuickFixClient {
 
             this.worker.postMessage({
                 type: 'RENDER',
-                payload: { requestId, imageData: imageData || undefined, width, height, adjustments }
+                payload: { requestId, imageData: imageData || undefined, width, height, adjustments, sourceId }
             } as WorkerMessage, transfer);
         });
     }

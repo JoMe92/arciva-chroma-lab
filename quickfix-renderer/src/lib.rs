@@ -254,7 +254,7 @@ export class QuickFixRenderer {
   process_frame(data: Uint8Array, width: number, height: number, adjustments: QuickFixAdjustments, options?: ProcessOptions): Promise<FrameResult>;
   render_to_canvas(data: Uint8Array, width: number, height: number, adjustments: QuickFixAdjustments, canvas: HTMLCanvasElement): Promise<void>;
   final_render(data: Uint8Array, width: number, height: number, adjustments: QuickFixAdjustments): Promise<FrameResult>;
-  set_lut(lut: LutResult): Promise<void>;
+  set_lut(lut: LutResult, id?: string): Promise<void>;
 }
 
 export function get_opaque_crop(rotation_deg: number, width: number, height: number): CropRect;
@@ -375,7 +375,7 @@ export interface QuickFixAdjustments {
     grain?: GrainSettings;
     geometry?: GeometrySettings;
     denoise?: DenoiseSettings;
-    lut?: Lut3DSettings;
+    lut?: Lut3DSettings; // includes externalId
     vignette?: VignetteSettings;
     sharpen?: SharpenSettings;
     clarity?: ClaritySettings;
@@ -435,7 +435,8 @@ pub fn process_frame_sync(
 
 // CPU Renderer wrapper to fit Renderer trait
 struct CpuRenderer {
-    lut: Option<(Vec<f32>, u32)>,
+    luts: std::collections::HashMap<String, (Vec<f32>, u32)>,
+    active_lut: Option<String>,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -444,8 +445,10 @@ impl Renderer for CpuRenderer {
         Ok(())
     }
 
-    async fn set_lut(&mut self, data: &[f32], size: u32) -> Result<(), RendererError> {
-        self.lut = Some((data.to_vec(), size));
+    async fn set_lut(&mut self, id: Option<&str>, data: &[f32], size: u32) -> Result<(), RendererError> {
+        let id = id.map(|s| s.to_string()).unwrap_or_else(|| "default".to_string());
+        self.luts.insert(id.clone(), (data.to_vec(), size));
+        self.active_lut = Some(id);
         Ok(())
     }
 
@@ -455,12 +458,18 @@ impl Renderer for CpuRenderer {
         width: u32,
         height: u32,
         settings: &QuickFixAdjustments,
+        _source_id: Option<&str>,
     ) -> Result<(Vec<u8>, Vec<u32>), RendererError> {
         // We need to copy data because process_frame_internal takes &mut [u8]
         let mut data_vec = data.to_vec();
 
         // Pass LUT data if available
-        let lut_ref = self.lut.as_ref().map(|(d, s)| (d.as_slice(), *s));
+        // First check settings for ID
+        let lut_id = settings.lut.as_ref()
+            .and_then(|l| l.external_id.as_deref())
+            .or(self.active_lut.as_deref());
+            
+        let lut_ref = lut_id.and_then(|id| self.luts.get(id)).map(|(d, s)| (d.as_slice(), *s));
 
         let (res, _, _, histogram) =
             operations::process_frame_internal(&mut data_vec, width, height, settings, lut_ref)
@@ -474,10 +483,44 @@ impl Renderer for CpuRenderer {
         height: u32,
         settings: &QuickFixAdjustments,
         canvas: &web_sys::HtmlCanvasElement,
+        _source_id: Option<&str>,
     ) -> Result<(), RendererError> {
         let mut data_vec = data.to_vec();
-        // Pass LUT data if available
-        let lut_ref = self.lut.as_ref().map(|(d, s)| (d.as_slice(), *s));
+        
+         if let Some(lut_settings) = &settings.lut {
+            if let Some(id) = &lut_settings.external_id {
+                let lut_ref = self.luts.get(id).map(|(d, s)| (d.as_slice(), *s));
+                
+                let (res, w, h, _) =
+                     operations::process_frame_internal(&mut data_vec, width, height, settings, lut_ref)
+                        .map_err(RendererError::RenderFailed)?;
+                 // Copy canvas stuff...
+                 if canvas.width() != w || canvas.height() != h {
+                    canvas.set_width(w);
+                    canvas.set_height(h);
+                }
+
+                let ctx = canvas
+                    .get_context("2d")
+                    .map_err(|_| RendererError::RenderFailed("Failed to get 2d context".into()))?
+                    .ok_or(RendererError::RenderFailed(
+                        "Failed to get 2d context".into(),
+                    ))?
+                    .dyn_into::<web_sys::CanvasRenderingContext2d>()
+                    .map_err(|_| RendererError::RenderFailed("Failed to cast to 2d context".into()))?;
+
+                let clamped = wasm_bindgen::Clamped(&res[..]);
+                let image_data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(clamped, w, h)
+                    .map_err(|e| RendererError::RenderFailed(format!("{:?}", e)))?;
+
+                ctx.put_image_data(&image_data, 0.0, 0.0)
+                    .map_err(|e| RendererError::RenderFailed(format!("{:?}", e)))?;
+                 return Ok(());
+            }
+        }
+        
+        // Fallback to active logic if no ID or other cases (legacy)
+        let lut_ref = self.active_lut.as_ref().and_then(|id| self.luts.get(id)).map(|(d,s)| (d.as_slice(), *s));
 
         let (res, w, h, _) =
             operations::process_frame_internal(&mut data_vec, width, height, settings, lut_ref)
@@ -558,14 +601,18 @@ impl QuickFixRenderer {
         }
 
         // 3. Fallback to CPU
+        // 3. Fallback to CPU
         if force.is_none() || force == Some("cpu") {
             return Ok(QuickFixRenderer {
-                renderer: Box::new(CpuRenderer { lut: None }),
+                renderer: Box::new(CpuRenderer { 
+                    luts: std::collections::HashMap::new(),
+                    active_lut: None,
+                }),
                 backend_name: "cpu".to_string(),
                 lut_cache: None,
             });
         }
-
+        
         #[cfg(not(target_arch = "wasm32"))]
         if force == Some("webgpu") || force == Some("webgl2") {
             return Err(JsValue::from_str(
@@ -587,7 +634,7 @@ impl QuickFixRenderer {
         width: u32,
         height: u32,
         adjustments: JsValue,
-        _options: Option<ProcessOptions>,
+        options: Option<ProcessOptions>,
     ) -> Result<FrameResult, JsValue> {
         let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
 
@@ -601,9 +648,11 @@ impl QuickFixRenderer {
             .into(),
         );
 
+        let source_id = options.as_ref().and_then(|o| o.source_id.as_deref());
+
         let (result_data, histogram) = self
             .renderer
-            .render(data, width, height, &adjustments)
+            .render(data, width, height, &adjustments, source_id)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
@@ -615,12 +664,12 @@ impl QuickFixRenderer {
         })
     }
 
-    pub async fn set_lut(&mut self, lut: JsValue) -> Result<(), JsValue> {
+    pub async fn set_lut(&mut self, lut: JsValue, id: Option<String>) -> Result<(), JsValue> {
         // lut is expected to be { data: Float32Array, size: number }
         // We can deserialize it into LutResult struct
         let lut: LutResult = serde_wasm_bindgen::from_value(lut)?;
         self.renderer
-            .set_lut(&lut.data, lut.size)
+            .set_lut(id.as_deref(), &lut.data, lut.size)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
             
@@ -639,8 +688,10 @@ impl QuickFixRenderer {
         canvas: web_sys::HtmlCanvasElement,
     ) -> Result<(), JsValue> {
         let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
+        // source_id not supported in simple render_to_canvas yet or need options? 
+        // For now pass None.
         self.renderer
-            .render_to_canvas(data, width, height, &adjustments, &canvas)
+            .render_to_canvas(data, width, height, &adjustments, &canvas, None)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(())

@@ -78,6 +78,7 @@ function App() {
   const [currentBackend, setCurrentBackend] = useState<string>('initializing...');
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [imageData, setImageData] = useState<Uint8Array | null>(null);
+  const [sourceId, setSourceId] = useState<string | undefined>(undefined);
   const [isRendering, setIsRendering] = useState(false);
   const [histogramData, setHistogramData] = useState<number[]>([]);
 
@@ -320,6 +321,7 @@ function App() {
         const data = ctx.getImageData(0, 0, img.width, img.height).data;
         const buffer = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
         setImageData(buffer);
+        setSourceId(self.crypto.randomUUID());
 
         if (canvasRef.current) {
           canvasRef.current.width = img.width;
@@ -407,7 +409,8 @@ function App() {
           null,
           image.width,
           image.height,
-          settings
+          settings,
+          sourceId
         );
 
         const { imageBitmap, width, height, histogram } = res;

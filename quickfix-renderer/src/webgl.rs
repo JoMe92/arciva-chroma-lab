@@ -795,7 +795,7 @@ impl Renderer for WebGlRenderer {
         self.ensure_initialized(None)
     }
 
-    async fn set_lut(&mut self, data: &[f32], size: u32) -> Result<(), RendererError> {
+    async fn set_lut(&mut self, _id: Option<&str>, data: &[f32], size: u32) -> Result<(), RendererError> {
         // We clone valid data into our cache
         self.lut_cache = Some((data.to_vec(), size));
         self.lut_dirty = true;
@@ -808,6 +808,7 @@ impl Renderer for WebGlRenderer {
         width: u32,
         height: u32,
         settings: &QuickFixAdjustments,
+        _source_id: Option<&str>,
     ) -> Result<(Vec<u8>, Vec<u32>), RendererError> {
         self.ensure_initialized(None)?;
 
@@ -846,6 +847,7 @@ impl Renderer for WebGlRenderer {
         height: u32,
         settings: &QuickFixAdjustments,
         canvas: &HtmlCanvasElement,
+        _source_id: Option<&str>,
     ) -> Result<(), RendererError> {
         // If we are rendering to a specific canvas, we need to initialize with THAT canvas context.
         // But our struct holds one context.

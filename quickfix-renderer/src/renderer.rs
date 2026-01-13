@@ -25,6 +25,7 @@ pub trait Renderer {
         width: u32,
         height: u32,
         settings: &QuickFixAdjustments,
+        source_id: Option<&str>,
     ) -> Result<(Vec<u8>, Vec<u32>), RendererError>;
 
     /// Render directly to a canvas (if applicable)
@@ -36,11 +37,12 @@ pub trait Renderer {
         height: u32,
         settings: &QuickFixAdjustments,
         canvas: &web_sys::HtmlCanvasElement,
+        source_id: Option<&str>,
     ) -> Result<(), RendererError>;
 
-    /// Set a 3D LUT for color grading.
+    /// Set a 3D LUT for color grading with an optional ID for caching.
     /// Data is flat RGB float array. Size is dimension size (e.g. 33 for 33x33x33).
-    async fn set_lut(&mut self, _data: &[f32], _size: u32) -> Result<(), RendererError> {
+    async fn set_lut(&mut self, _id: Option<&str>, _data: &[f32], _size: u32) -> Result<(), RendererError> {
         Ok(()) // Default implementation for backends that don't support it yet
     }
 }
