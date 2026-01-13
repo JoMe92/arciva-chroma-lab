@@ -31,42 +31,17 @@ struct SettingsUniform {
     denoise_luminance: f32,
     denoise_color: f32,
     curves_intensity: f32,
+    st_shadow_hue: f32,
+    st_shadow_sat: f32,
+    st_highlight_hue: f32,
+    st_highlight_sat: f32,
+    st_balance: f32,
+    /// Padding to match WGSL alignment (144 bytes used + 1 padding + 2 distortion + 1 align = 160)
     _padding: f32,
-    // Previous: 16 floats exactly?
-    // geo (4), flip (4), crop_rot/asp/exp/cont (4), high/shad/temp/tint (4), grain/size/w/h (4).
-    // Total 20 floats?
-    // Let's recount.
-    // Matrix (12 floats, 4 padding in aligned vec3 cols?) -> 48 bytes.
-    // geo_padding (1) = 49th float? No matrix is separate.
-    // Struct:
-    // mat3x3 (48 bytes)
-    // geo_padding (4 bytes) -> offset 52
-    // flip_v (4) -> 56
-    // flip_h (4) -> 60
-    // crop_rot (4) -> 64
-    // crop_asp (4) -> 68
-    // exp (4) -> 72
-    // cont (4) -> 76
-    // high (4) -> 80
-    // shad (4) -> 84
-    // temp (4) -> 88
-    // tint (4) -> 92
-    // grain_amt (4) -> 96
-    // grain_sz (4) -> 100
-    // src_w (4) -> 104
-    // src_h (4) -> 108
-
-    // Now adding lut_intensity.
-    // lut_int (4) -> 112
-    // Struct alignment usually 16 bytes for uniform buffers.
-    // 112 is divisible by 16 (112 = 16 * 7).
-    // So we are good?
-    // Let's add padding just in case to match WGSL explicitly if needed, but WGSL is packed?
-    // WGSL `Settings` struct:
-    // ... src_width, src_height;
-    // lut_intensity;
-    // };
-    // WGSL struct size is implicitly padded to 16 bytes at end.
+    distortion_k1: f32,
+    distortion_k2: f32,
+    hsl_enabled: f32,
+    hsl: [[f32; 4]; 8],
 }
 
 pub struct WebGpuRenderer {
@@ -574,7 +549,72 @@ impl Renderer for WebGpuRenderer {
                 .unwrap_or(0.0),
             denoise_color: settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
             curves_intensity: settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
+            // _padding: 0.0, // Removed duplicate
+            st_shadow_hue: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.shadow_hue / 360.0)
+                .unwrap_or(0.0),
+            st_shadow_sat: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.shadow_sat)
+                .unwrap_or(0.0),
+            st_highlight_hue: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.highlight_hue / 360.0)
+                .unwrap_or(0.0),
+            st_highlight_sat: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.highlight_sat)
+                .unwrap_or(0.0),
+            st_balance: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.balance)
+                .unwrap_or(0.0),
             _padding: 0.0,
+            distortion_k1: settings.distortion.as_ref().map(|d| d.k1).unwrap_or(0.0),
+            distortion_k2: settings.distortion.as_ref().map(|d| d.k2).unwrap_or(0.0),
+            hsl_enabled: if settings.hsl.is_some() { 1.0 } else { 0.0 },
+            hsl: {
+                let mut hsl_data = [[0.0f32; 4]; 8];
+                let centers = [
+                    0.0 / 360.0,
+                    30.0 / 360.0,
+                    60.0 / 360.0,
+                    120.0 / 360.0,
+                    180.0 / 360.0,
+                    240.0 / 360.0,
+                    270.0 / 360.0,
+                    300.0 / 360.0,
+                ];
+                if let Some(hsl) = &settings.hsl {
+                    let ranges = [
+                        &hsl.red,
+                        &hsl.orange,
+                        &hsl.yellow,
+                        &hsl.green,
+                        &hsl.aqua,
+                        &hsl.blue,
+                        &hsl.purple,
+                        &hsl.magenta,
+                    ];
+                    for i in 0..8 {
+                        hsl_data[i][0] = ranges[i].hue;
+                        hsl_data[i][1] = ranges[i].saturation;
+                        hsl_data[i][2] = ranges[i].luminance;
+                        hsl_data[i][3] = centers[i];
+                    }
+                } else {
+                    for i in 0..8 {
+                        hsl_data[i][3] = centers[i];
+                    }
+                }
+                hsl_data
+            },
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1027,7 +1067,73 @@ impl Renderer for WebGpuRenderer {
                 .unwrap_or(0.0),
             denoise_color: settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
             curves_intensity: settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
+            // _padding: 0.0, // Removed duplicate
+            st_shadow_hue: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.shadow_hue / 360.0)
+                .unwrap_or(0.0),
+            st_shadow_sat: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.shadow_sat)
+                .unwrap_or(0.0),
+            st_highlight_hue: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.highlight_hue / 360.0)
+                .unwrap_or(0.0),
+            st_highlight_sat: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.highlight_sat)
+                .unwrap_or(0.0),
+            st_balance: settings
+                .split_toning
+                .as_ref()
+                .map(|s| s.balance)
+                .unwrap_or(0.0),
             _padding: 0.0,
+            distortion_k1: settings.distortion.as_ref().map(|d| d.k1).unwrap_or(0.0),
+            distortion_k2: settings.distortion.as_ref().map(|d| d.k2).unwrap_or(0.0),
+            hsl_enabled: if settings.hsl.is_some() { 1.0 } else { 0.0 },
+
+            hsl: {
+                let mut hsl_data = [[0.0f32; 4]; 8];
+                let centers = [
+                    0.0 / 360.0,
+                    30.0 / 360.0,
+                    60.0 / 360.0,
+                    120.0 / 360.0,
+                    180.0 / 360.0,
+                    240.0 / 360.0,
+                    270.0 / 360.0,
+                    300.0 / 360.0,
+                ];
+                if let Some(hsl) = &settings.hsl {
+                    let ranges = [
+                        &hsl.red,
+                        &hsl.orange,
+                        &hsl.yellow,
+                        &hsl.green,
+                        &hsl.aqua,
+                        &hsl.blue,
+                        &hsl.purple,
+                        &hsl.magenta,
+                    ];
+                    for i in 0..8 {
+                        hsl_data[i][0] = ranges[i].hue;
+                        hsl_data[i][1] = ranges[i].saturation;
+                        hsl_data[i][2] = ranges[i].luminance;
+                        hsl_data[i][3] = centers[i];
+                    }
+                } else {
+                    for i in 0..8 {
+                        hsl_data[i][3] = centers[i];
+                    }
+                }
+                hsl_data
+            },
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

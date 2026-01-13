@@ -144,15 +144,91 @@ pub struct CurvesSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct HslRangeSettings {
+    pub hue: f32, // Offset degrees or normalized? Let's use -1.0 to 1.0 (mapped to e.g. -30 to 30 deg)
+    pub saturation: f32, // -1.0 to 1.0 (offset)
+    pub luminance: f32, // -1.0 to 1.0 (offset)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SplitToningSettings {
+    pub shadow_hue: f32,    // 0..360
+    pub shadow_sat: f32,    // 0..1
+    pub highlight_hue: f32, // 0..360
+    pub highlight_sat: f32, // 0..1
+    pub balance: f32,       // -1..1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HslSettings {
+    pub red: HslRangeSettings,
+    pub orange: HslRangeSettings,
+    pub yellow: HslRangeSettings,
+    pub green: HslRangeSettings,
+    pub aqua: HslRangeSettings,
+    pub blue: HslRangeSettings,
+    pub purple: HslRangeSettings,
+    pub magenta: HslRangeSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct QuickFixAdjustments {
     pub crop: Option<CropSettings>,
     pub exposure: Option<ExposureSettings>,
     pub color: Option<ColorSettings>,
     pub curves: Option<CurvesSettings>,
+    pub hsl: Option<HslSettings>,
+    pub split_toning: Option<SplitToningSettings>,
     pub grain: Option<GrainSettings>,
     pub geometry: Option<GeometrySettings>,
     pub denoise: Option<DenoiseSettings>,
+
     pub lut: Option<Lut3DSettings>,
+    pub vignette: Option<VignetteSettings>,
+    pub sharpen: Option<SharpenSettings>,
+    pub clarity: Option<ClaritySettings>,
+    pub dehaze: Option<DehazeSettings>,
+    pub distortion: Option<LensDistortionSettings>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VignetteSettings {
+    pub amount: f32, // 0.0 to 1.0 (or -1.0 to 1.0 if supporting white vignette?) Users usually want dark. Let's assume -1.0 to 1.0 where < 0 is dark.
+    pub midpoint: f32, // 0.0 to 1.0 (size of clear area)
+    pub roundness: f32, // -1.0 to 1.0 (shape, square vs circle)
+    pub feather: f32, // 0.0 to 1.0 (smoothness)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SharpenSettings {
+    pub amount: f32,    // 0.0 to 1.0 (or higher)
+    pub radius: f32,    // 0.0 to ... px
+    pub threshold: f32, // 0.0 to 255.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaritySettings {
+    pub amount: f32, // -1.0 to 1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DehazeSettings {
+    pub amount: f32, // 0.0 to 1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LensDistortionSettings {
+    pub k1: f32, // Main radial distortion
+    pub k2: f32, // Secondary radial distortion
+                 // We could add centers or scale, but let's stick to k1/k2 for now
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -228,6 +304,57 @@ export interface CurvesSettings {
     blue?: ChannelCurve;
 }
 
+export interface HslRangeSettings {
+    hue: number;
+    saturation: number;
+    luminance: number;
+}
+
+export interface HslSettings {
+    red: HslRangeSettings;
+    orange: HslRangeSettings;
+    yellow: HslRangeSettings;
+    green: HslRangeSettings;
+    aqua: HslRangeSettings;
+    blue: HslRangeSettings;
+    purple: HslRangeSettings;
+    magenta: HslRangeSettings;
+}
+
+export interface SplitToningSettings {
+    shadowHue: number;
+    shadowSat: number;
+    highlightHue: number;
+    highlightSat: number;
+    balance: number;
+}
+
+export interface VignetteSettings {
+    amount: number;
+    midpoint: number;
+    roundness: number;
+    feather: number;
+}
+
+export interface SharpenSettings {
+    amount: number;
+    radius: number;
+    threshold: number;
+}
+
+export interface ClaritySettings {
+    amount: number;
+}
+
+export interface DehazeSettings {
+    amount: number;
+}
+
+export interface LensDistortionSettings {
+    k1: number;
+    k2: number;
+}
+
 export interface ChannelCurve {
     points: CurvePoint[];
 }
@@ -242,11 +369,19 @@ export interface QuickFixAdjustments {
     exposure?: ExposureSettings;
     color?: ColorSettings;
     curves?: CurvesSettings;
+    hsl?: HslSettings;
+    splitToning?: SplitToningSettings;
     grain?: GrainSettings;
     geometry?: GeometrySettings;
     denoise?: DenoiseSettings;
     lut?: Lut3DSettings;
+    vignette?: VignetteSettings;
+    sharpen?: SharpenSettings;
+    clarity?: ClaritySettings;
+    dehaze?: DehazeSettings;
+    distortion?: LensDistortionSettings;
 }
+
 "#;
 
 impl QuickFixAdjustments {

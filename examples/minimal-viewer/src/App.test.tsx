@@ -68,11 +68,10 @@ describe('App Integration', () => {
             stroke: vi.fn(),
         } as unknown as CanvasRenderingContext2D;
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(((contextId: string) => {
             if (contextId === '2d') return mockContext;
             return null;
-        }) as any);
+        }) as unknown as (contextId: string) => CanvasRenderingContext2D | null);
 
         // Mock Image
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -91,12 +90,19 @@ describe('App Integration', () => {
         // Mock ImageData
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (globalThis as any).ImageData = class {
-            constructor(public data: Uint8ClampedArray, public width: number, public height: number) { }
+            data: Uint8ClampedArray;
+            width: number;
+            height: number;
+            constructor(data: Uint8ClampedArray, width: number, height: number) {
+                this.data = data;
+                this.width = width;
+                this.height = height;
+            }
         };
 
         // Mock createImageBitmap
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (globalThis as any).createImageBitmap = async (_image: any) => {
+        (globalThis as any).createImageBitmap = async () => {
             return {
                 close: () => { },
                 width: 100,

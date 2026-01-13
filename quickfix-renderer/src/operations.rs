@@ -1,6 +1,7 @@
 use crate::{
-    ColorSettings, CropSettings, CurvesSettings, DenoiseSettings, ExposureSettings,
-    GeometrySettings, GrainSettings, QuickFixAdjustments,
+    ClaritySettings, ColorSettings, CropSettings, CurvesSettings, DehazeSettings, DenoiseSettings,
+    ExposureSettings, GeometrySettings, GrainSettings, HslSettings, LensDistortionSettings,
+    QuickFixAdjustments, SharpenSettings, SplitToningSettings, VignetteSettings,
 };
 use image::{ImageBuffer, Rgba, RgbaImage};
 use rand::SeedableRng;
@@ -18,6 +19,9 @@ fn clamp_u8(v: f32) -> u8 {
 }
 
 use crate::api_types::Lut3DSettings;
+// New imports for potential test module or general use
+// use super::*;
+// use crate::{ChannelCurve, CropRect, CurvePoint};
 
 pub fn compute_histogram(data: &[u8]) -> Vec<u32> {
     let mut histogram = vec![0u32; 256 * 3]; // R, G, B concatenated
@@ -47,6 +51,11 @@ pub fn process_frame_internal(
     // Convert raw bytes to ImageBuffer
     let mut img: RgbaImage =
         ImageBuffer::from_raw(width, height, data.to_vec()).ok_or("Invalid buffer size")?;
+
+    // 0. Lens Distortion
+    if let Some(distortion) = &adjustments.distortion {
+        img = apply_lens_distortion(&img, distortion);
+    }
 
     // 1. Geometry
     if let Some(geo) = &adjustments.geometry {
@@ -78,12 +87,42 @@ pub fn process_frame_internal(
         apply_curves_in_place(&mut img, curves);
     }
 
-    // 7. LUT
+    // 7. HSL
+    if let Some(hsl) = &adjustments.hsl {
+        apply_hsl_in_place(&mut img, hsl);
+    }
+
+    // 7.5 Split Toning
+    if let Some(st) = &adjustments.split_toning {
+        apply_split_toning_in_place(&mut img, st);
+    }
+
+    // 7.6 Dehaze
+    if let Some(dehaze) = &adjustments.dehaze {
+        apply_dehaze_in_place(&mut img, dehaze);
+    }
+
+    // 7.7 Clarity
+    if let Some(clarity) = &adjustments.clarity {
+        apply_clarity_in_place(&mut img, clarity);
+    }
+
+    // 8. LUT
     if let (Some(lut_settings), Some((lut_data, lut_size))) = (&adjustments.lut, lut_buffer) {
         apply_lut_in_place(&mut img, lut_data, lut_size, lut_settings);
     }
 
-    // 8. Grain
+    // 8.5 Vignette
+    if let Some(vignette) = &adjustments.vignette {
+        apply_vignette_in_place(&mut img, vignette);
+    }
+
+    // 8.6 Sharpen
+    if let Some(sharpen) = &adjustments.sharpen {
+        apply_sharpen_in_place(&mut img, sharpen);
+    }
+
+    // 9. Grain
     if let Some(grain) = &adjustments.grain {
         apply_grain_in_place(&mut img, grain);
     }
@@ -347,6 +386,53 @@ fn apply_crop_rotate(img: &RgbaImage, settings: &CropSettings) -> RgbaImage {
     result
 }
 
+fn apply_lens_distortion(img: &RgbaImage, settings: &LensDistortionSettings) -> RgbaImage {
+    if settings.k1.abs() < 1e-5 && settings.k2.abs() < 1e-5 {
+        return img.clone();
+    }
+
+    let width = img.width();
+    let height = img.height();
+    let mut new_img = RgbaImage::new(width, height);
+
+    let w_f32 = width as f32;
+    let h_f32 = height as f32;
+    let center_x = 0.5;
+    let center_y = 0.5;
+
+    // We iterate over OUTPUT pixels (straight image) and map to INPUT pixels (distorted source)
+    for y in 0..height {
+        let v = y as f32 / h_f32;
+        for x in 0..width {
+            let u = x as f32 / w_f32;
+
+            // Distort UV
+            // r^2 = x^2 + y^2 (relative to center)
+            let rel_x = u - center_x;
+            let rel_y = v - center_y;
+            let r2 = rel_x * rel_x + rel_y * rel_y;
+            let scaling = 1.0 + settings.k1 * r2 + settings.k2 * r2 * r2;
+
+            let src_u = center_x + rel_x * scaling;
+            let src_v = center_y + rel_y * scaling;
+
+            // Check bounds
+            if !(0.0..=1.0).contains(&src_u) || !(0.0..=1.0).contains(&src_v) {
+                // Black
+                new_img.put_pixel(x, y, Rgba([0, 0, 0, 255])); // Alpha 255 for opaque black? Or 0? Let's use 0 for transparent border.
+                continue;
+            }
+
+            let src_x = src_u * w_f32;
+            let src_y = src_v * h_f32;
+
+            new_img.put_pixel(x, y, sample_bicubic(img, src_x, src_y));
+        }
+    }
+
+    new_img
+}
+
 fn apply_exposure_in_place(img: &mut RgbaImage, settings: &ExposureSettings) {
     let exposure = settings.exposure.unwrap_or(0.0);
     let contrast = settings.contrast.unwrap_or(1.0);
@@ -598,6 +684,141 @@ fn yuv_to_rgb(yuv: [f32; 3]) -> [f32; 3] {
     let g = y - 0.39465 * u - 0.58060 * v;
     let b = y + 2.03211 * u;
     [r, g, b]
+}
+
+fn rgb_to_hsl(rgb: [f32; 3]) -> [f32; 3] {
+    let r = rgb[0];
+    let g = rgb[1];
+    let b = rgb[2];
+
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+
+    let mut h = 0.0;
+    if delta > 0.0 {
+        if max == r {
+            h = (g - b) / delta % 6.0;
+        } else if max == g {
+            h = (b - r) / delta + 2.0;
+        } else {
+            h = (r - g) / delta + 4.0;
+        }
+        h /= 6.0;
+        if h < 0.0 {
+            h += 1.0;
+        }
+    }
+
+    let l = (max + min) / 2.0;
+    let s = if delta == 0.0 {
+        0.0
+    } else {
+        delta / (1.0 - (2.0 * l - 1.0).abs())
+    };
+
+    [h, s, l]
+}
+
+fn hsl_to_rgb(hsl: [f32; 3]) -> [f32; 3] {
+    let h = hsl[0];
+    let s = hsl[1];
+    let l = hsl[2];
+
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h * 6.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+
+    let (r, g, b) = if h < 1.0 / 6.0 {
+        (c, x, 0.0)
+    } else if h < 2.0 / 6.0 {
+        (x, c, 0.0)
+    } else if h < 3.0 / 6.0 {
+        (0.0, c, x)
+    } else if h < 4.0 / 6.0 {
+        (0.0, x, c)
+    } else if h < 5.0 / 6.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+
+    [r + m, g + m, b + m]
+}
+
+pub(crate) fn apply_hsl_in_place(img: &mut RgbaImage, settings: &HslSettings) {
+    // Range centers in Hue (0..1)
+    // Red (0), Orange (30), Yellow (60), Green (120), Aqua (180), Blue (240), Purple (270), Magenta (300)
+    // Actually standard 8-range is often:
+    // Red: 0/360
+    // Orange: 30
+    // Yellow: 60
+    // Green: 120
+    // Aqua/Cyan: 180
+    // Blue: 240
+    // Purple/Violet: 270
+    // Magenta: 300
+
+    let ranges = [
+        (0.0 / 360.0, &settings.red),
+        (30.0 / 360.0, &settings.orange),
+        (60.0 / 360.0, &settings.yellow),
+        (120.0 / 360.0, &settings.green),
+        (180.0 / 360.0, &settings.aqua),
+        (240.0 / 360.0, &settings.blue),
+        (270.0 / 360.0, &settings.purple),
+        (300.0 / 360.0, &settings.magenta),
+    ];
+
+    for pixel in img.pixels_mut() {
+        let r_in = pixel[0] as f32 / 255.0;
+        let g_in = pixel[1] as f32 / 255.0;
+        let b_in = pixel[2] as f32 / 255.0;
+        let a = pixel[3];
+
+        let mut hsl = rgb_to_hsl([r_in, g_in, b_in]);
+        let h = hsl[0];
+
+        let mut delta_h = 0.0;
+        let mut delta_s = 0.0;
+        let mut delta_l = 0.0;
+
+        for (center, s) in ranges.iter() {
+            // Hue distance with wrapping
+            let mut dist = (h - center).abs();
+            if dist > 0.5 {
+                dist = 1.0 - dist;
+            }
+
+            // Falloff: using a simple bell curve or linear falloff
+            // Width of influence. Typically ranges overlap.
+            // Let's use 60 deg (1/6) as total width of influence (30 deg each side).
+            let width = 60.0 / 360.0;
+            if dist < width {
+                // Quadratic falloff for smoothness
+                let t = dist / width;
+                let weight = 1.0 - t * t * (3.0 - 2.0 * t); // Smoothstep-like falloff
+
+                delta_h += s.hue * weight;
+                delta_s += s.saturation * weight;
+                delta_l += s.luminance * weight;
+            }
+        }
+
+        // Apply adjustments
+        // Hue: wrap around
+        hsl[0] = (hsl[0] + delta_h * (30.0 / 360.0)).rem_euclid(1.0);
+
+        // Saturation/Luminosity: offset + clamp
+        hsl[1] = clamp(hsl[1] + delta_s, 0.0, 1.0);
+        hsl[2] = clamp(hsl[2] + delta_l, 0.0, 1.0);
+
+        let rgb_out = hsl_to_rgb(hsl);
+        pixel[0] = clamp_u8(rgb_out[0] * 255.0);
+        pixel[1] = clamp_u8(rgb_out[1] * 255.0);
+        pixel[2] = clamp_u8(rgb_out[2] * 255.0);
+        pixel[3] = a;
+    }
 }
 
 pub(crate) fn apply_curves_in_place(img: &mut RgbaImage, settings: &CurvesSettings) {
@@ -868,13 +1089,398 @@ pub(crate) fn apply_lut_in_place(
         pixel[2] = clamp_u8(b_out * 255.0);
     }
 }
+pub(crate) fn apply_split_toning_in_place(img: &mut RgbaImage, settings: &SplitToningSettings) {
+    let shadow_h = settings.shadow_hue / 360.0;
+    let shadow_s = clamp(settings.shadow_sat, 0.0, 1.0);
+    let highlight_h = settings.highlight_hue / 360.0;
+    let highlight_s = clamp(settings.highlight_sat, 0.0, 1.0);
+    let balance = clamp(settings.balance, -1.0, 1.0);
+
+    let shadow_rgb = hsl_to_rgb([shadow_h, shadow_s, 0.5]);
+    let highlight_rgb = hsl_to_rgb([highlight_h, highlight_s, 0.5]);
+
+    for pixel in img.pixels_mut() {
+        let r = pixel[0] as f32 / 255.0;
+        let g = pixel[1] as f32 / 255.0;
+        let b = pixel[2] as f32 / 255.0;
+
+        let lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+        // Balance shifts the midpoint. Midpoint is usually 0.5.
+        // If balance is -1, midpoint is 0. If balance is 1, midpoint is 1.
+        let mid = 0.5 + balance * 0.5;
+
+        // Shadow/Highlight masks with smooth transition
+        let highlight_mask = clamp((lum - mid) / (1.0 - mid).max(0.01), 0.0, 1.0);
+        let shadow_mask = 1.0 - clamp(lum / mid.max(0.01), 0.0, 1.0);
+
+        // Blending (Soft Light behavior)
+        fn soft_light(base: f32, blend: f32) -> f32 {
+            if blend < 0.5 {
+                base - (1.0 - 2.0 * blend) * base * (1.0 - base)
+            } else {
+                base + (2.0 * blend - 1.0)
+                    * (if base <= 0.25 {
+                        ((16.0 * base - 12.0) * base + 4.0) * base
+                    } else {
+                        base.sqrt()
+                    } - base)
+            }
+        }
+
+        let mut r_out = r;
+        let mut g_out = g;
+        let mut b_out = b;
+
+        // Apply Shadow Tint
+        if shadow_s > 0.0 {
+            r_out = soft_light(r_out, shadow_rgb[0]) * shadow_mask + r_out * (1.0 - shadow_mask);
+            g_out = soft_light(g_out, shadow_rgb[1]) * shadow_mask + g_out * (1.0 - shadow_mask);
+            b_out = soft_light(b_out, shadow_rgb[2]) * shadow_mask + b_out * (1.0 - shadow_mask);
+        }
+
+        // Apply Highlight Tint
+        if highlight_s > 0.0 {
+            r_out = soft_light(r_out, highlight_rgb[0]) * highlight_mask
+                + r_out * (1.0 - highlight_mask);
+            g_out = soft_light(g_out, highlight_rgb[1]) * highlight_mask
+                + g_out * (1.0 - highlight_mask);
+            b_out = soft_light(b_out, highlight_rgb[2]) * highlight_mask
+                + b_out * (1.0 - highlight_mask);
+        }
+
+        pixel[0] = clamp_u8(r_out * 255.0);
+        pixel[1] = clamp_u8(g_out * 255.0);
+        pixel[2] = clamp_u8(b_out * 255.0);
+    }
+}
+
+pub(crate) fn apply_vignette_in_place(img: &mut RgbaImage, settings: &VignetteSettings) {
+    if settings.amount.abs() < 1e-4 {
+        return;
+    }
+
+    let (width, height) = img.dimensions();
+    let center_x = width as f32 / 2.0;
+    let center_y = height as f32 / 2.0;
+
+    // Normalize coordinates to [0, 1] relative to center
+    let radius_max_x = center_x;
+    let radius_max_y = center_y;
+
+    let roundness = clamp(settings.roundness, -1.0, 1.0);
+    // +1.0 = Rectangle, 0.0 = Oval
+
+    let feather = clamp(settings.feather, 0.0, 1.0);
+    let amount = clamp(settings.amount, -1.0, 1.0);
+    let midpoint = clamp(settings.midpoint, 0.0, 1.0);
+
+    for y in 0..height {
+        let dy = (y as f32 - center_y) / radius_max_y; // -1..1
+        let dy_abs = dy.abs();
+        let dy_sq = dy * dy;
+
+        for x in 0..width {
+            let dx = (x as f32 - center_x) / radius_max_x; // -1..1
+            let dx_abs = dx.abs();
+            let dx_sq = dx * dx;
+
+            // Distance calculation
+            let dist_oval = (dx_sq + dy_sq).sqrt();
+            let dist_rect = dx_abs.max(dy_abs);
+
+            let dist = if roundness >= 0.0 {
+                // Blend Oval -> Rect
+                dist_oval * (1.0 - roundness) + dist_rect * roundness
+            } else {
+                dist_oval
+            };
+
+            // Vignette Falloff
+            let low = midpoint * (1.0 - 0.9 * feather);
+            let high = 1.0 + feather;
+
+            let t = (dist - low) / (high - low).max(1e-5);
+            let t = clamp(t, 0.0, 1.0);
+
+            // Smoothstep
+            let mask = t * t * (3.0 - 2.0 * t);
+
+            if mask > 0.0 {
+                let pixel = img.get_pixel_mut(x, y);
+
+                let r = pixel[0] as f32 / 255.0;
+                let g = pixel[1] as f32 / 255.0;
+                let b = pixel[2] as f32 / 255.0;
+
+                let mut r_out = r;
+                let mut g_out = g;
+                let mut b_out = b;
+
+                if amount < 0.0 {
+                    // Darken
+                    let factor = 1.0 - mask * amount.abs();
+                    r_out *= factor;
+                    g_out *= factor;
+                    b_out *= factor;
+                } else {
+                    // Lighten (White vignette)
+                    let factor = mask * amount;
+                    r_out = r_out + (1.0 - r_out) * factor;
+                    g_out = g_out + (1.0 - g_out) * factor;
+                    b_out = b_out + (1.0 - b_out) * factor;
+                }
+
+                pixel[0] = clamp_u8(r_out * 255.0);
+                pixel[1] = clamp_u8(g_out * 255.0);
+                pixel[2] = clamp_u8(b_out * 255.0);
+            }
+        }
+    }
+}
+
+pub(crate) fn apply_sharpen_in_place(img: &mut RgbaImage, settings: &SharpenSettings) {
+    if settings.amount <= 0.0 {
+        return;
+    }
+
+    let radius = settings.radius.max(0.1);
+    // Use standard gaussian blur for sharpening (usually small radius)
+    // image::imageops::blur uses Gaussian
+    let blurred = image::imageops::blur(img, radius);
+
+    let threshold = settings.threshold;
+
+    for (x, y, pixel) in img.enumerate_pixels_mut() {
+        let blur_px = blurred.get_pixel(x, y);
+
+        for c in 0..3 {
+            let val = pixel[c] as f32;
+            let blur_val = blur_px[c] as f32;
+
+            let diff = val - blur_val;
+            if diff.abs() * 255.0 >= threshold {
+                let new_val = val + diff * settings.amount;
+                pixel[c] = clamp_u8(new_val);
+            }
+        }
+    }
+}
+
+pub(crate) fn apply_clarity_in_place(img: &mut RgbaImage, settings: &ClaritySettings) {
+    if settings.amount.abs() < 1e-4 {
+        return;
+    }
+
+    let (width, height) = img.dimensions();
+    // Large radius for local contrast
+    let radius = (width.min(height) as f32 / 64.0).clamp(8.0, 100.0);
+
+    // Use fast box blur approximation (1 pass is often enough for clarity effect,
+    // but 3 passes is smoother. Let's do 2 passes for speed/quality balance)
+    let blurred = fast_box_blur(img, radius as u32);
+    // let blurred = fast_box_blur(&blurred, radius as u32); // Second pass if needed
+
+    for (x, y, pixel) in img.enumerate_pixels_mut() {
+        let blur_px = blurred.get_pixel(x, y);
+
+        // Apply to RGB roughly or specific channel?
+        // Simple Unsharp Mask logic
+        for c in 0..3 {
+            let val = pixel[c] as f32;
+            let blur_val = blur_px[c] as f32;
+            let diff = val - blur_val;
+
+            // Clarity typically adds mid-tone contrast using Soft Light or Overlay blending of High Pass
+            // Or just straight unsharp mask.
+            let new_val = val + diff * settings.amount;
+            pixel[c] = clamp_u8(new_val);
+        }
+    }
+}
+
+pub(crate) fn apply_dehaze_in_place(img: &mut RgbaImage, settings: &DehazeSettings) {
+    if settings.amount <= 0.0 {
+        return;
+    }
+
+    // Simple Dehaze: "De-fog"
+    // Concept: Haze adds a white veil. Dark regions get brighter.
+    // 1. Estimate Veil: Dark Channel.
+    // 2. Subtract Veil.
+
+    let amount = clamp(settings.amount, 0.0, 1.0) * 0.95; // Limit max amount
+
+    // Optimisation: We can just do per-pixel operation for speed
+    // T(x) = 1 - w * min(r,g,b)
+    // J(x) = (I(x) - A) / max(T(x), 0.1) + A
+    // Taking A = 1.0 (255) approx.
+
+    for pixel in img.pixels_mut() {
+        let r = pixel[0] as f32 / 255.0;
+        let g = pixel[1] as f32 / 255.0;
+        let b = pixel[2] as f32 / 255.0;
+
+        let dark = r.min(g).min(b);
+        let transm = 1.0 - amount * dark;
+        let transm = transm.max(0.1); // Prevent div by zero
+
+        // Recover: J = (I - 1) / t + 1
+        // (Assuming Atmosphere is white)
+        let r_new = (r - 1.0) / transm + 1.0;
+        let g_new = (g - 1.0) / transm + 1.0;
+        let b_new = (b - 1.0) / transm + 1.0;
+
+        pixel[0] = clamp_u8(r_new * 255.0);
+        pixel[1] = clamp_u8(g_new * 255.0);
+        pixel[2] = clamp_u8(b_new * 255.0);
+    }
+}
+
+fn fast_box_blur(img: &RgbaImage, radius: u32) -> RgbaImage {
+    let (width, height) = img.dimensions();
+    if radius == 0 {
+        return img.clone();
+    }
+
+    let r = radius as i32;
+
+    // Simpler separative blur implementation
+    // Creates intermediate buffer
+    let mut h_blur = RgbaImage::new(width, height);
+
+    // Horizontal
+    for y in 0..height {
+        let mut sum_r: u32 = 0;
+        let mut sum_g: u32 = 0;
+        let mut sum_b: u32 = 0;
+        let mut count: u32 = 0;
+
+        // Initial window for x=0
+        for i in -r..=r {
+            let ix = i.clamp(0, width as i32 - 1) as u32;
+            let px = img.get_pixel(ix, y);
+            sum_r += px[0] as u32;
+            sum_g += px[1] as u32;
+            sum_b += px[2] as u32;
+            count += 1;
+        }
+
+        // This naïve window re-summing is O(R*W). Sliding window is O(W).
+        // For radius ~20, O(R*W) is okay but let's try to be efficient.
+        // But implementing correct sliding window with boundary clamping is verbose.
+        // Let's do O(W) sliding window.
+
+        // Prepare first window [0-r, 0+r].
+        // current sum is sum([0-r..0+r]).
+        // Actually, clamp means we read pixel 0 for negative indices.
+        // sum_r already computed above with clamp.
+
+        h_blur.put_pixel(
+            0,
+            y,
+            Rgba([
+                (sum_r / count) as u8,
+                (sum_g / count) as u8,
+                (sum_b / count) as u8,
+                255,
+            ]),
+        );
+
+        for x in 1..width {
+            // Remove x-r-1
+            let out_idx = (x as i32 - r - 1).clamp(0, width as i32 - 1) as u32;
+            let p_out = img.get_pixel(out_idx, y);
+            sum_r -= p_out[0] as u32;
+            sum_g -= p_out[1] as u32;
+            sum_b -= p_out[2] as u32;
+
+            // Add x+r
+            let in_idx = (x as i32 + r).clamp(0, width as i32 - 1) as u32;
+            let p_in = img.get_pixel(in_idx, y);
+            sum_r += p_in[0] as u32;
+            sum_g += p_in[1] as u32;
+            sum_b += p_in[2] as u32;
+
+            h_blur.put_pixel(
+                x,
+                y,
+                Rgba([
+                    (sum_r / count) as u8,
+                    (sum_g / count) as u8,
+                    (sum_b / count) as u8,
+                    255,
+                ]),
+            );
+        }
+    }
+
+    let mut v_blur = RgbaImage::new(width, height);
+    // Vertical
+    for x in 0..width {
+        let mut sum_r: u32 = 0;
+        let mut sum_g: u32 = 0;
+        let mut sum_b: u32 = 0;
+        let mut count: u32 = 0;
+
+        for i in -r..=r {
+            let iy = i.clamp(0, height as i32 - 1) as u32;
+            let px = h_blur.get_pixel(x, iy);
+            sum_r += px[0] as u32;
+            sum_g += px[1] as u32;
+            sum_b += px[2] as u32;
+            count += 1;
+        }
+
+        v_blur.put_pixel(
+            x,
+            0,
+            Rgba([
+                (sum_r / count) as u8,
+                (sum_g / count) as u8,
+                (sum_b / count) as u8,
+                255,
+            ]),
+        );
+
+        for y in 1..height {
+            let out_idx = (y as i32 - r - 1).clamp(0, height as i32 - 1) as u32;
+            let p_out = h_blur.get_pixel(x, out_idx);
+            sum_r -= p_out[0] as u32;
+            sum_g -= p_out[1] as u32;
+            sum_b -= p_out[2] as u32;
+
+            let in_idx = (y as i32 + r).clamp(0, height as i32 - 1) as u32;
+            let p_in = h_blur.get_pixel(x, in_idx);
+            sum_r += p_in[0] as u32;
+            sum_g += p_in[1] as u32;
+            sum_b += p_in[2] as u32;
+
+            let p_orig = img.get_pixel(x, y); // Preserve original alpha
+            v_blur.put_pixel(
+                x,
+                y,
+                Rgba([
+                    (sum_r / count) as u8,
+                    (sum_g / count) as u8,
+                    (sum_b / count) as u8,
+                    p_orig[3],
+                ]),
+            );
+        }
+    }
+
+    v_blur
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ChannelCurve, CropRect, CurvePoint};
     use crate::{
-        ChannelCurve, ColorSettings, CropRect, CropSettings, CurvePoint, CurvesSettings,
-        ExposureSettings, GeometrySettings,
+        ClaritySettings, ColorSettings, CropSettings, DehazeSettings, ExposureSettings,
+        GeometrySettings, GrainSettings, HslSettings, LensDistortionSettings, QuickFixAdjustments,
+        SharpenSettings, SplitToningSettings, VignetteSettings,
     };
 
     fn create_test_image(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {
@@ -1165,5 +1771,217 @@ mod tests {
         let px = img.get_pixel(0, 0);
         // Original: 100, Full curve: 200. Intensity 0.5 -> 150.
         assert!(px[0] > 140 && px[0] < 160);
+    }
+
+    #[test]
+    fn test_rgb_hsl_conversion() {
+        let rgb = [1.0, 0.0, 0.0]; // Red
+        let hsl = rgb_to_hsl(rgb);
+        assert!((hsl[0] - 0.0).abs() < 1e-5);
+        assert!((hsl[1] - 1.0).abs() < 1e-5);
+        assert!((hsl[2] - 0.5).abs() < 1e-5);
+
+        let rgb_back = hsl_to_rgb(hsl);
+        assert!((rgb_back[0] - 1.0).abs() < 1e-5);
+        assert!((rgb_back[1] - 0.0).abs() < 1e-5);
+        assert!((rgb_back[2] - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_apply_hsl_red_saturation() {
+        let mut img = create_test_image(1, 1, [255, 0, 0, 255]); // Pure Red
+        let mut settings = HslSettings::default();
+        settings.red.saturation = 0.5; // Boost saturation (even though already 1.0, test rounding/clamping)
+
+        // Let's test desaturation instead to be sure
+        settings.red.saturation = -1.0;
+        apply_hsl_in_place(&mut img, &settings);
+        let px = img.get_pixel(0, 0);
+        // Red is at hue 0. Should be gray now.
+        assert!(px[0] == px[1] && px[1] == px[2]);
+        assert!(px[0] > 120 && px[0] < 130); // 0.5 luminance -> ~127
+    }
+
+    #[test]
+    fn test_apply_hsl_green_luminance() {
+        let mut img = create_test_image(1, 1, [0, 255, 0, 255]); // Pure Green
+        let mut settings = HslSettings::default();
+        settings.green.luminance = -0.5; // Darken
+        apply_hsl_in_place(&mut img, &settings);
+        let px = img.get_pixel(0, 0);
+        // Should be darker green
+        assert!(px[1] < 200);
+        assert!(px[0] == 0);
+        assert!(px[2] == 0);
+    }
+    #[test]
+    fn test_apply_split_toning() {
+        let mut img = create_test_image(1, 1, [128, 128, 128, 255]); // Mid gray
+        let settings = SplitToningSettings {
+            shadow_hue: 200.0, // Teal
+            shadow_sat: 0.5,
+            highlight_hue: 30.0, // Orange
+            highlight_sat: 0.5,
+            balance: 0.0,
+        };
+        apply_split_toning_in_place(&mut img, &settings);
+        let px = img.get_pixel(0, 0);
+
+        // Mid gray should be affected by both (or neutral if masks are 0 at midpoint,
+        // but our masks overlap mid).
+        // Let's just verify it changed.
+        assert!(px[0] != 128 || px[1] != 128 || px[2] != 128);
+    }
+
+    #[test]
+    fn test_apply_vignette() {
+        // Create white image
+        let width = 100;
+        let height = 100;
+        let mut img = create_test_image(width, height, [255, 255, 255, 255]);
+
+        let settings = VignetteSettings {
+            amount: -1.0, // Full darkness
+            midpoint: 0.5,
+            roundness: 0.0, // Oval
+            feather: 0.5,
+        };
+
+        apply_vignette_in_place(&mut img, &settings);
+
+        let center = img.get_pixel(width / 2, height / 2);
+        let corner = img.get_pixel(0, 0);
+
+        // Center should be largely unaffected (white)
+        assert!(center[0] > 240);
+
+        // Corner should be significantly darkened
+        assert!(corner[0] < 100);
+
+        // Verify output is grayish (keeps saturation balance on white image)
+        assert_eq!(corner[0], corner[1]);
+        assert_eq!(corner[1], corner[2]);
+    }
+    #[test]
+    fn test_apply_sharpen() {
+        // Create a blurry image or just an edge.
+        // Let's create a step function (edge).
+        let width = 10;
+        let height = 10;
+        let mut img = create_test_image(width, height, [100, 100, 100, 255]);
+        // Right half bright
+        for y in 0..height {
+            for x in width / 2..width {
+                img.put_pixel(x, y, Rgba([200, 200, 200, 255]));
+            }
+        }
+
+        let settings = SharpenSettings {
+            amount: 1.0,
+            radius: 1.0,
+            threshold: 0.0,
+        };
+
+        // Sharpening should increase contrast at the edge.
+        // The pixel just to the left of the edge (x=4) should get darker (100 -> <100)
+        // The pixel just to the right of the edge (x=5) should get brighter (200 -> >200)
+
+        // Before: x=4 is 100. x=5 is 200.
+        apply_sharpen_in_place(&mut img, &settings);
+
+        let p_left = img.get_pixel(4, 5);
+        let p_right = img.get_pixel(5, 5);
+
+        assert!(p_left[0] < 100);
+        assert!(p_right[0] > 200);
+    }
+
+    #[test]
+    fn test_apply_lens_distortion() {
+        let width = 100;
+        let height = 100;
+        let mut img = create_test_image(width, height, [255, 255, 255, 255]);
+
+        // Draw a straight line at x=50 (width 3: 49, 50, 51)
+        for y in 0..height {
+            img.put_pixel(49, y, Rgba([0, 0, 0, 255]));
+            img.put_pixel(50, y, Rgba([0, 0, 0, 255]));
+            img.put_pixel(51, y, Rgba([0, 0, 0, 255]));
+        }
+
+        let settings = LensDistortionSettings { k1: 0.5, k2: 0.0 };
+
+        let res = apply_lens_distortion(&img, &settings);
+
+        // Center should stay at 50 (cx=0.5 -> x=50).
+        let center_px = res.get_pixel(50, 50);
+        assert_eq!(center_px[0], 0); // Should be black
+
+        // Point not at center (x=25) should look different (shifted).
+        // Vertical line at x=25.
+        let mut img_vert = create_test_image(width, height, [255, 255, 255, 255]);
+        for y in 0..height {
+            img_vert.put_pixel(25, y, Rgba([0, 0, 0, 255]));
+        }
+
+        let res_vert = apply_lens_distortion(&img_vert, &settings);
+
+        // At center y=50, the line shifts inwards?
+        // u=0.25 maps to src_u=0.242.
+        // So Res(25) looks at Src(24). Src(24) is white.
+        // Src(25) is black.
+        // So Res(25) is white.
+        // The black line effectively moved to x=26 (where src_u maps to 0.25).
+        assert!(res_vert.get_pixel(25, 50)[0] > 100); // Moved away
+    }
+    #[test]
+    fn test_apply_clarity() {
+        // Clarity boosts local contrast.
+        // Similar to sharpen but large radius.
+        let width = 20;
+        let height = 20;
+        let mut img = create_test_image(width, height, [100, 100, 100, 255]);
+        // Center bright spot
+        for y in 5..15 {
+            for x in 5..15 {
+                img.put_pixel(x, y, Rgba([150, 150, 150, 255]));
+            }
+        }
+
+        let settings = ClaritySettings { amount: 0.5 };
+        apply_clarity_in_place(&mut img, &settings);
+
+        // Center pixel (10,10) is 150. Surround is 100.
+        // Blur will average them (e.g. 125).
+        // Difference = 150 - 125 = +25.
+        // New = 150 + 25*0.5 = 162.5.
+        // So center should get brighter.
+        let center = img.get_pixel(10, 10);
+        assert!(center[0] > 150);
+
+        // Verify it doesn't effect uniform area much?
+        // Fast box blur might have edge effects but internal uniform area should be close to uniform blur = pixel.
+        // so diff = 0.
+        // But our test image is small, so radius might cover everything.
+    }
+
+    #[test]
+    fn test_apply_dehaze() {
+        // Create an image with haze (elevated dark channel)
+        // e.g. RGB(200, 200, 210) - kinda whitish/grayish
+        let mut img = create_test_image(1, 1, [200, 200, 210, 255]);
+
+        let settings = DehazeSettings { amount: 0.5 };
+        apply_dehaze_in_place(&mut img, &settings);
+
+        let px = img.get_pixel(0, 0);
+
+        // Dark channel of [200, 200, 210] is 200 (approx 0.78).
+        // Transm = 1.0 - 0.5 * 0.78 = 0.61.
+        // Recover: (0.78 - 1.0) / 0.61 + 1.0 = -0.22 / 0.61 + 1.0 = -0.36 + 1.0 = 0.64 -> 163.
+        // So values should drop (contrast stretching downward).
+        assert!(px[0] < 200);
+        assert!(px[1] < 200);
+        assert!(px[2] < 210);
     }
 }

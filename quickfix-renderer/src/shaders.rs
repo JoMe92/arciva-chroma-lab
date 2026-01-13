@@ -54,6 +54,16 @@ struct Settings {
     denoise_luminance: f32,
     denoise_color: f32, 
     curves_intensity: f32,
+    st_shadow_hue: f32,
+    st_shadow_sat: f32,
+    st_highlight_hue: f32,
+    st_highlight_sat: f32,
+    st_balance: f32,
+    padding3: f32,
+    distortion_k1: f32,
+    distortion_k2: f32,
+    hsl_enabled: f32,
+    hsl: array<vec4<f32>, 8>,
 };
 
 @group(0) @binding(0) var<uniform> settings: Settings;
@@ -148,6 +158,61 @@ fn yuv_to_rgb(yuv: vec3<f32>) -> vec3<f32> {
     let g = y - 0.39465 * u - 0.58060 * v;
     let b = y + 2.03211 * u;
     return vec3<f32>(r, g, b);
+}
+
+fn rgb_to_hsl(rgb: vec3<f32>) -> vec3<f32> {
+    let max_val = max(rgb.r, max(rgb.g, rgb.b));
+    let min_val = min(rgb.r, min(rgb.g, rgb.b));
+    let delta = max_val - min_val;
+
+    var h: f32 = 0.0;
+    if (delta > 0.0) {
+        if (max_val == rgb.r) {
+            h = (rgb.g - rgb.b) / delta;
+            if (h < 0.0) { h += 6.0; }
+        } else if (max_val == rgb.g) {
+            h = (rgb.b - rgb.r) / delta + 2.0;
+        } else {
+            h = (rgb.r - rgb.g) / delta + 4.0;
+        }
+        h /= 6.0;
+    }
+
+    let l = (max_val + min_val) / 2.0;
+    var s: f32 = 0.0;
+    if (delta > 0.0) {
+        s = delta / (1.0 - abs(2.0 * l - 1.0));
+    }
+    return vec3<f32>(h, s, l);
+}
+
+fn hsl_to_rgb(hsl: vec3<f32>) -> vec3<f32> {
+    let h = hsl.x;
+    let s = hsl.y;
+    let l = hsl.z;
+    let c = (1.0 - abs(2.0 * l - 1.0)) * s;
+    let x = c * (1.0 - abs(f32(h * 6.0) % 2.0 - 1.0));
+    let m = l - c / 2.0;
+    var rgb: vec3<f32>;
+    if (h < 1.0/6.0) { rgb = vec3<f32>(c, x, 0.0); }
+    else if (h < 2.0/6.0) { rgb = vec3<f32>(x, c, 0.0); }
+    else if (h < 3.0/6.0) { rgb = vec3<f32>(0.0, c, x); }
+    else if (h < 4.0/6.0) { rgb = vec3<f32>(0.0, x, c); }
+    else if (h < 5.0/6.0) { rgb = vec3<f32>(x, 0.0, c); }
+    else { rgb = vec3<f32>(c, 0.0, x); }
+    return rgb + vec3<f32>(m);
+}
+
+// Lens Distortion Helper
+fn distort_uv(uv: vec2<f32>) -> vec2<f32> {
+    if (settings.distortion_k1 == 0.0 && settings.distortion_k2 == 0.0) {
+        return uv;
+    }
+    let center = vec2<f32>(0.5, 0.5);
+    let rel = uv - center;
+    let r2 = dot(rel, rel);
+    let scaling = 1.0 + settings.distortion_k1 * r2 + settings.distortion_k2 * r2 * r2;
+    return center + rel * scaling;
 }
 
 fn sample_denoised(uv: vec2<f32>) -> vec4<f32> {
@@ -347,12 +412,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
     
-    // Check bounds
+    // Sample Texture
+    // Distort UV
+    uv = distort_uv(uv);
+
+    // Check bounds after distortion (since we might pull from outside)
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
-    
-    // Sample Texture
+
     // Use bicubic if enabled/needed, or bilinear for speed.
     // For now, let's use the bicubic function we wrote.
     var color = sample_denoised(uv);
@@ -409,6 +477,89 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let curved_color = vec3<f32>(curve_r, curve_g, curve_b);
     color = vec4<f32>(mix(color.rgb, curved_color, settings.curves_intensity), color.a);
 
+    // 5.2 HSL Tuning
+    if (settings.hsl_enabled > 0.5) {
+        var hsl = rgb_to_hsl(color.rgb);
+        let centers = array<f32, 8>(0.0, 30.0/360.0, 60.0/360.0, 120.0/360.0, 180.0/360.0, 240.0/360.0, 270.0/360.0, 300.0/360.0);
+        
+        var dH: f32 = 0.0;
+        var dS: f32 = 0.0;
+        var dL: f32 = 0.0;
+        
+        for (var i = 0; i < 8; i++) {
+            var dist = abs(hsl.x - centers[i]);
+            if (dist > 0.5) { dist = 1.0 - dist; }
+            
+            let width = 60.0 / 360.0;
+            if (dist < width) {
+                let t = dist / width;
+                let weight = 1.0 - t * t * (3.0 - 2.0 * t);
+                
+                dH += settings.hsl[i].x * weight;
+                dS += settings.hsl[i].y * weight;
+                dL += settings.hsl[i].z * weight;
+            }
+        }
+        
+        hsl.x = (hsl.x + dH * (30.0 / 360.0)) % 1.0;
+        if (hsl.x < 0.0) { hsl.x += 1.0; }
+        hsl.y = clamp(hsl.y + dS, 0.0, 1.0);
+        hsl.z = clamp(hsl.z + dL, 0.0, 1.0);
+        color = vec4<f32>(hsl_to_rgb(hsl), color.a);
+    }
+
+    // 5.3 Split Toning
+    if (settings.st_shadow_sat > 0.0 || settings.st_highlight_sat > 0.0) {
+        let lum = dot(color.rgb, vec3<f32>(0.299, 0.587, 0.114));
+        let mid = 0.5 + settings.st_balance * 0.5;
+        let shadow_rgb = hsl_to_rgb(vec3<f32>(settings.st_shadow_hue / 360.0, settings.st_shadow_sat, 0.5));
+        let highlight_rgb = hsl_to_rgb(vec3<f32>(settings.st_highlight_hue / 360.0, settings.st_highlight_sat, 0.5));
+        
+        // Masks
+        let h_mask = clamp((lum - mid) / max(0.01, 1.0 - mid), 0.0, 1.0);
+        let s_mask = 1.0 - clamp(lum / max(0.01, mid), 0.0, 1.0);
+
+        // Soft Light
+        var final_rgb = color.rgb;
+        
+        // Shadow pass
+        if (settings.st_shadow_sat > 0.0) {
+            for (var i = 0; i < 3; i++) {
+                let base = final_rgb[i];
+                let blend = shadow_rgb[i];
+                var res: f32;
+                if (blend < 0.5) {
+                    res = base - (1.0 - 2.0 * blend) * base * (1.0 - base);
+                } else {
+                    var v: f32;
+                    if (base <= 0.25) { v = ((16.0 * base - 12.0) * base + 4.0) * base; }
+                    else { v = sqrt(base); }
+                    res = base + (2.0 * blend - 1.0) * (v - base);
+                }
+                final_rgb[i] = mix(base, res, s_mask);
+            }
+        }
+        
+        // Highlight pass
+        if (settings.st_highlight_sat > 0.0) {
+            for (var i = 0; i < 3; i++) {
+                let base = final_rgb[i];
+                let blend = highlight_rgb[i];
+                var res: f32;
+                if (blend < 0.5) {
+                    res = base - (1.0 - 2.0 * blend) * base * (1.0 - base);
+                } else {
+                    var v: f32;
+                    if (base <= 0.25) { v = ((16.0 * base - 12.0) * base + 4.0) * base; }
+                    else { v = sqrt(base); }
+                    res = base + (2.0 * blend - 1.0) * (v - base);
+                }
+                final_rgb[i] = mix(base, res, h_mask);
+            }
+        }
+        color = vec4<f32>(final_rgb, color.a);
+    }
+
     // 5.5 LUT
     if (settings.lut_intensity > 0.0) {
         let lut_color = textureSample(t_lut, s_lut, color.rgb);
@@ -431,11 +582,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Python noise is Normal(0, sigma).
         // We should probably upload noise as centered around 0.5 or just add (noise - 0.5).
         // Let's assume texture is 0..1, representing -sigma..sigma?
-        // No, let's assume texture is raw noise values normalized.
-        // Easier: Texture contains pre-computed noise * 128 + 128.
-        // So (val - 0.5) * 2 * sigma.
-        
-        // Actually, let's just say the texture contains standard normal noise mapped to 0..1?
         // No, precision issues.
         // Let's say texture contains noise in -1..1 range (f32 texture) or 0..1 (unorm).
         // Let's assume 0..1 where 0.5 is 0.
@@ -509,8 +655,20 @@ uniform float u_denoise_luminance;
 uniform float u_denoise_color;
 uniform sampler2D u_curves;
 uniform float u_curves_intensity;
+uniform float u_distortion_k1;
+uniform float u_distortion_k2;
+uniform float u_hsl_enabled;
+uniform vec4 u_hsl[8]; // xyz = HSL adjustment, w = center hue
+uniform float u_st_shadow_hue;
+uniform float u_st_shadow_sat;
+uniform float u_st_highlight_hue;
+uniform float u_st_highlight_sat;
+uniform float u_st_balance;
 
-// Helper: Cubic Hermite
+
+
+
+
 float cubic_hermite(float a, float b, float c, float d, float t) {
     float a_val = -a / 2.0 + (3.0 * b) / 2.0 - (3.0 * c) / 2.0 + d / 2.0;
     float b_val = a - (5.0 * b) / 2.0 + 2.0 * c - d / 2.0;
@@ -566,6 +724,60 @@ vec3 yuv_to_rgb(vec3 yuv) {
     float g = y - 0.39465 * u - 0.58060 * v;
     float b = y + 2.03211 * u;
     return vec3(r, g, b);
+}
+
+vec3 rgb_to_hsl(vec3 rgb) {
+    float max_val = max(rgb.r, max(rgb.g, rgb.b));
+    float min_val = min(rgb.r, min(rgb.g, rgb.b));
+    float delta = max_val - min_val;
+
+    float h = 0.0;
+    if (delta > 0.0) {
+        if (max_val == rgb.r) {
+            h = mod((rgb.g - rgb.b) / delta, 6.0);
+        } else if (max_val == rgb.g) {
+            h = (rgb.b - rgb.r) / delta + 2.0;
+        } else {
+            h = (rgb.r - rgb.g) / delta + 4.0;
+        }
+        h /= 6.0;
+        if (h < 0.0) h += 1.0;
+    }
+
+    float l = (max_val + min_val) / 2.0;
+    float s = 0.0;
+    if (delta > 0.0) {
+        s = delta / (1.0 - abs(2.0 * l - 1.0));
+    }
+    return vec3(h, s, l);
+}
+
+vec3 hsl_to_rgb(vec3 hsl) {
+    float h = hsl.x;
+    float s = hsl.y;
+    float l = hsl.z;
+    float c = (1.0 - abs(2.0 * l - 1.0)) * s;
+    float x = c * (1.0 - abs(mod(h * 6.0, 2.0) - 1.0));
+    float m = l - c / 2.0;
+    vec3 rgb;
+    if (h < 1.0/6.0) rgb = vec3(c, x, 0.0);
+    else if (h < 2.0/6.0) rgb = vec3(x, c, 0.0);
+    else if (h < 3.0/6.0) rgb = vec3(0.0, c, x);
+    else if (h < 4.0/6.0) rgb = vec3(0.0, x, c);
+    else if (h < 5.0/6.0) rgb = vec3(x, 0.0, c);
+    else rgb = vec3(c, 0.0, x);
+    return rgb + m;
+}
+
+vec2 distort_uv(vec2 uv) {
+    if (u_distortion_k1 == 0.0 && u_distortion_k2 == 0.0) {
+        return uv;
+    }
+    vec2 center = vec2(0.5);
+    vec2 rel = uv - center;
+    float r2 = dot(rel, rel);
+    float scaling = 1.0 + u_distortion_k1 * r2 + u_distortion_k2 * r2 * r2;
+    return center + rel * scaling;
 }
 
 vec4 sample_denoised(vec2 uv) {
@@ -685,11 +897,17 @@ void main() {
         }
     }
     
+
+    
+    // Distort UV
+    uv = distort_uv(uv);
+
+    // Check bounds after distortion
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         out_color = vec4(0.0);
         return;
     }
-    
+
     vec4 color = sample_denoised(uv);
     
     // 3. Exposure
@@ -724,6 +942,81 @@ void main() {
     curved_col.g = texture(u_curves, vec2(color.g, 0.5)).g;
     curved_col.b = texture(u_curves, vec2(color.b, 0.5)).b;
     color.rgb = mix(color.rgb, curved_col, u_curves_intensity);
+
+    // 5.2 HSL Tuning
+    // 5.2 HSL Tuning
+    if (u_hsl_enabled > 0.5) {
+        vec3 hsl = rgb_to_hsl(color.rgb);
+        vec3 dHSL = vec3(0.0);
+        
+        for (int i = 0; i < 8; i++) {
+            float center = u_hsl[i].w;
+            float dist = abs(hsl.x - center);
+            if (dist > 0.5) dist = 1.0 - dist;
+            
+            float width = 60.0 / 360.0;
+            if (dist < width) {
+                float t = dist / width;
+                float weight = 1.0 - t * t * (3.0 - 2.0 * t);
+                dHSL += u_hsl[i].xyz * weight;
+            }
+        }
+        
+        hsl.x = mod(hsl.x + dHSL.x * (30.0 / 360.0), 1.0);
+        hsl.y = clamp(hsl.y + dHSL.y, 0.0, 1.0);
+        hsl.z = clamp(hsl.z + dHSL.z, 0.0, 1.0);
+        color.rgb = hsl_to_rgb(hsl);
+    }
+
+    // 5.3 Split Toning
+    if (u_st_shadow_sat > 0.0 || u_st_highlight_sat > 0.0) {
+        float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+        float mid = 0.5 + u_st_balance * 0.5;
+        vec3 shadow_rgb = hsl_to_rgb(vec3(u_st_shadow_hue / 360.0, u_st_shadow_sat, 0.5));
+        vec3 highlight_rgb = hsl_to_rgb(vec3(u_st_highlight_hue / 360.0, u_st_highlight_sat, 0.5));
+        
+        float h_mask = clamp((lum - mid) / max(0.01, 1.0 - mid), 0.0, 1.0);
+        float s_mask = 1.0 - clamp(lum / max(0.01, mid), 0.0, 1.0);
+
+        vec3 final_rgb = color.rgb;
+        
+        // Shadow pass
+        if (u_st_shadow_sat > 0.0) {
+            for (int i = 0; i < 3; i++) {
+                float base = final_rgb[i];
+                float blend = shadow_rgb[i];
+                float res;
+                if (blend < 0.5) {
+                    res = base - (1.0 - 2.0 * blend) * base * (1.0 - base);
+                } else {
+                    float v;
+                    if (base <= 0.25) { v = ((16.0 * base - 12.0) * base + 4.0) * base; }
+                    else { v = sqrt(base); }
+                    res = base + (2.0 * blend - 1.0) * (v - base);
+                }
+                final_rgb[i] = mix(base, res, s_mask);
+            }
+        }
+        
+        // Highlight pass
+        if (u_st_highlight_sat > 0.0) {
+            for (int i = 0; i < 3; i++) {
+                float base = final_rgb[i];
+                float blend = highlight_rgb[i];
+                float res;
+                if (blend < 0.5) {
+                    res = base - (1.0 - 2.0 * blend) * base * (1.0 - base);
+                } else {
+                    float v;
+                    if (base <= 0.25) { v = ((16.0 * base - 12.0) * base + 4.0) * base; }
+                    else { v = sqrt(base); }
+                    res = base + (2.0 * blend - 1.0) * (v - base);
+                }
+                final_rgb[i] = mix(base, res, h_mask);
+            }
+        }
+        color.rgb = final_rgb;
+    }
 
     // 5.5 LUT 
     if (u_lut_intensity > 0.0) {

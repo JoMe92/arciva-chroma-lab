@@ -102,6 +102,30 @@ function App() {
   // Interaction State
   const [isPickingWB, setIsPickingWB] = useState(false);
 
+  // Split Toning
+  const [stShadowHue, setStShadowHue] = useState(210); // Default Teal-ish
+  const [stShadowSat, setStShadowSat] = useState(0);
+  const [stHighlightHue, setStHighlightHue] = useState(30); // Default Orange-ish
+  const [stHighlightSat, setStHighlightSat] = useState(0);
+
+  const [stBalance, setStBalance] = useState(0);
+
+  // Vignette
+  const [vAmount, setVAmount] = useState(0);
+  const [vMidpoint, setVMidpoint] = useState(0.5);
+  const [vRoundness, setVRoundness] = useState(0);
+
+  const [vFeather, setVFeather] = useState(0.5);
+
+  // Sharpen / Clarity / Dehaze
+  const [sharpenAmount, setSharpenAmount] = useState(0);
+  const [sharpenRadius, setSharpenRadius] = useState(1.0);
+  const [sharpenThreshold, setSharpenThreshold] = useState(0);
+
+  const [clarityAmount, setClarityAmount] = useState(0);
+  const [dehazeAmount, setDehazeAmount] = useState(0);
+
+
   const handleLutUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
@@ -134,9 +158,40 @@ function App() {
   const [flipVertical, setFlipVertical] = useState(false);
   const [flipHorizontal, setFlipHorizontal] = useState(false);
 
-  // Curves State
+  // Distortion Settings
+  const [distK1, setDistK1] = useState(0);
+  const [distK2, setDistK2] = useState(0);
+
   const [curves, setCurves] = useState<CurvesSettings>({
     intensity: 1.0,
+  });
+
+  interface HslRange {
+    hue: number;
+    saturation: number;
+    luminance: number;
+  }
+
+  interface HslSettings {
+    red: HslRange;
+    orange: HslRange;
+    yellow: HslRange;
+    green: HslRange;
+    aqua: HslRange;
+    blue: HslRange;
+    purple: HslRange;
+    magenta: HslRange;
+  }
+
+  const [hsl, setHsl] = useState<HslSettings>({
+    red: { hue: 0, saturation: 0, luminance: 0 },
+    orange: { hue: 0, saturation: 0, luminance: 0 },
+    yellow: { hue: 0, saturation: 0, luminance: 0 },
+    green: { hue: 0, saturation: 0, luminance: 0 },
+    aqua: { hue: 0, saturation: 0, luminance: 0 },
+    blue: { hue: 0, saturation: 0, luminance: 0 },
+    purple: { hue: 0, saturation: 0, luminance: 0 },
+    magenta: { hue: 0, saturation: 0, luminance: 0 },
   });
 
   const setCurvesIntensity = (intensity: number) => {
@@ -309,7 +364,33 @@ function App() {
           flipVertical: flipVertical,
           flipHorizontal: flipHorizontal
         },
-        curves: curves
+        curves: curves,
+        hsl: hsl,
+        splitToning: {
+          shadowHue: stShadowHue,
+          shadowSat: stShadowSat,
+          highlightHue: stHighlightHue,
+          highlightSat: stHighlightSat,
+          balance: stBalance
+        },
+        vignette: {
+          amount: vAmount,
+          midpoint: vMidpoint,
+          roundness: vRoundness,
+          feather: vFeather
+        },
+        sharpen: {
+          amount: sharpenAmount,
+          radius: sharpenRadius,
+          threshold: sharpenThreshold
+        },
+        clarity: {
+          amount: clarityAmount
+        },
+        dehaze: {
+          amount: dehazeAmount
+        }, // End dehaze
+        // End settings properties
       };
 
       try {
@@ -410,7 +491,7 @@ function App() {
 
     render();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, currentBackend, lutIntensity, denoiseLuminance, denoiseColor, curves]);
+  }, [imageData, image, exposure, contrast, highlights, shadows, temp, tint, grainAmount, grainSize, rotation, appliedCrop, cropX, cropY, cropW, cropH, geoVertical, geoHorizontal, flipVertical, flipHorizontal, distK1, distK2, currentBackend, lutIntensity, denoiseLuminance, denoiseColor, curves, hsl, stShadowHue, stShadowSat, stHighlightHue, stHighlightSat, stBalance, vAmount, vMidpoint, vRoundness, vFeather, sharpenAmount, sharpenRadius, sharpenThreshold, clarityAmount, dehazeAmount]);
 
   // Handle Canvas Click for WB Picking
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -418,8 +499,8 @@ function App() {
     if (!isPickingWB || !imageData || !image || !canvasRef.current) return;
 
     // Guard: Geometry must be neutral (Rotation/Perspective makes mapping complex)
-    if (Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0) {
-      console.warn("WB Picker: Cannot pick with active geometry transforms.");
+    if (Math.abs(rotation) > 0 || Math.abs(geoVertical) > 0 || Math.abs(geoHorizontal) > 0 || Math.abs(distK1) > 0 || Math.abs(distK2) > 0) {
+      console.warn("WB Picker: Cannot pick with active geometry/distortion transforms.");
       setIsPickingWB(false);
       return;
     }
@@ -622,6 +703,220 @@ function App() {
           </section>
 
           <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Split Toning</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <div>
+                <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '0.5rem', color: '#ccc' }}>Highlights</label>
+                <div style={{ marginBottom: '0.5rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                    <label style={{ fontSize: '0.85rem' }}>Hue</label>
+                    <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{stHighlightHue}°</span>
+                  </div>
+                  <input type="range" min="0" max="360" step="1" value={stHighlightHue} onChange={e => setStHighlightHue(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                  <div style={{ height: '4px', background: `hsl(${stHighlightHue}, 100%, 50%)`, borderRadius: '2px', marginTop: '4px' }}></div>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                    <label style={{ fontSize: '0.85rem' }}>Saturation</label>
+                    <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{stHighlightSat}</span>
+                  </div>
+                  <input type="range" min="0" max="1" step="0.05" value={stHighlightSat} onChange={e => setStHighlightSat(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                </div>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '0.5rem', color: '#ccc' }}>Shadows</label>
+                <div style={{ marginBottom: '0.5rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                    <label style={{ fontSize: '0.85rem' }}>Hue</label>
+                    <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{stShadowHue}°</span>
+                  </div>
+                  <input type="range" min="0" max="360" step="1" value={stShadowHue} onChange={e => setStShadowHue(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                  <div style={{ height: '4px', background: `hsl(${stShadowHue}, 100%, 50%)`, borderRadius: '2px', marginTop: '4px' }}></div>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                    <label style={{ fontSize: '0.85rem' }}>Saturation</label>
+                    <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{stShadowSat}</span>
+                  </div>
+                  <input type="range" min="0" max="1" step="0.05" value={stShadowSat} onChange={e => setStShadowSat(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                </div>
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Balance</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{stBalance}</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.1" value={stBalance} onChange={e => setStBalance(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', opacity: 0.5, marginTop: '2px' }}>
+                  <span>Shadows</span>
+                  <span>Highlights</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Lens Distortion</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>k1 (Main)</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{distK1.toFixed(2)}</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.01" value={distK1} onChange={e => setDistK1(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>k2 (Secondary)</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{distK2.toFixed(2)}</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.01" value={distK2} onChange={e => setDistK2(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>HSL Tuning</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {(['red', 'orange', 'yellow', 'green', 'aqua', 'blue', 'purple', 'magenta'] as const).map((col) => (
+                <div key={col} style={{ background: '#1a1a1a', padding: '0.8rem', borderRadius: '4px' }}>
+                  <div style={{ fontSize: '0.9rem', marginBottom: '0.6rem', color: '#fff', fontWeight: 'bold', textTransform: 'capitalize', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: col }} />
+                    {col}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', opacity: 0.7 }}>
+                        <label>Hue</label>
+                        <span>{hsl[col].hue.toFixed(2)}</span>
+                      </div>
+                      <input
+                        type="range" min="-1" max="1" step="0.1"
+                        value={hsl[col].hue}
+                        onChange={e => setHsl({ ...hsl, [col]: { ...hsl[col], hue: parseFloat(e.target.value) } })}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', opacity: 0.7 }}>
+                        <label>Sat</label>
+                        <span>{hsl[col].saturation.toFixed(2)}</span>
+                      </div>
+                      <input
+                        type="range" min="-1" max="1" step="0.1"
+                        value={hsl[col].saturation}
+                        onChange={e => setHsl({ ...hsl, [col]: { ...hsl[col], saturation: parseFloat(e.target.value) } })}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', opacity: 0.7 }}>
+                        <label>Lum</label>
+                        <span>{hsl[col].luminance.toFixed(2)}</span>
+                      </div>
+                      <input
+                        type="range" min="-1" max="1" step="0.1"
+                        value={hsl[col].luminance}
+                        onChange={e => setHsl({ ...hsl, [col]: { ...hsl[col], luminance: parseFloat(e.target.value) } })}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Details</h3>
+
+            <div style={{ paddingBottom: '1rem', borderBottom: '1px solid #222', marginBottom: '1rem' }}>
+              <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '0.5rem', color: '#ccc' }}>Sharpen</label>
+
+              <div style={{ marginBottom: '0.8rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Amount</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{sharpenAmount}</span>
+                </div>
+                <input type="range" min="0" max="5.0" step="0.1" value={sharpenAmount} onChange={e => setSharpenAmount(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div style={{ marginBottom: '0.8rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Radius</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{sharpenRadius}</span>
+                </div>
+                <input type="range" min="0.1" max="10.0" step="0.1" value={sharpenRadius} onChange={e => setSharpenRadius(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Threshold</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{sharpenThreshold}</span>
+                </div>
+                <input type="range" min="0" max="50" step="1" value={sharpenThreshold} onChange={e => setSharpenThreshold(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Clarity</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{clarityAmount}</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.05" value={clarityAmount} onChange={e => setClarityAmount(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Dehaze</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{dehazeAmount}</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.05" value={dehazeAmount} onChange={e => setDehazeAmount(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Vignette</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Amount</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{vAmount}</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.05" value={vAmount} onChange={e => setVAmount(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Midpoint</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{vMidpoint}</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.05" value={vMidpoint} onChange={e => setVMidpoint(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Roundness</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{vRoundness}</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.05" value={vRoundness} onChange={e => setVRoundness(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.85rem' }}>Feather</label>
+                  <span style={{ fontSize: '0.85rem', opacity: 0.7 }}>{vFeather}</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.05" value={vFeather} onChange={e => setVFeather(parseFloat(e.target.value))} style={{ width: '100%' }} />
+              </div>
+            </div>
+          </section>
+
+          <section>
             <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '0.5rem' }}>Grain</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
               <div>
@@ -792,7 +1087,7 @@ function App() {
           </section>
         </aside>
       </div>
-    </div>
+    </div >
   );
 }
 

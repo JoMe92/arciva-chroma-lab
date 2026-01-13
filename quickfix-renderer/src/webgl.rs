@@ -700,6 +700,86 @@ impl WebGlRenderer {
             loc("u_curves_intensity").as_ref(),
             settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
         );
+
+        gl.uniform_1_f32(
+            loc("u_distortion_k1").as_ref(),
+            settings.distortion.as_ref().map(|d| d.k1).unwrap_or(0.0),
+        );
+        gl.uniform_1_f32(
+            loc("u_distortion_k2").as_ref(),
+            settings.distortion.as_ref().map(|d| d.k2).unwrap_or(0.0),
+        );
+
+        gl.uniform_1_f32(
+            loc("u_hsl_enabled").as_ref(),
+            if settings.hsl.is_some() { 1.0 } else { 0.0 },
+        );
+
+        // HSL
+        if let Some(hsl) = &settings.hsl {
+            let centers = [
+                0.0 / 360.0,
+                30.0 / 360.0,
+                60.0 / 360.0,
+                120.0 / 360.0,
+                180.0 / 360.0,
+                240.0 / 360.0,
+                270.0 / 360.0,
+                300.0 / 360.0,
+            ];
+            let ranges = [
+                &hsl.red,
+                &hsl.orange,
+                &hsl.yellow,
+                &hsl.green,
+                &hsl.aqua,
+                &hsl.blue,
+                &hsl.purple,
+                &hsl.magenta,
+            ];
+
+            let mut hsl_data = [0.0f32; 32];
+            for i in 0..8 {
+                hsl_data[i * 4] = ranges[i].hue;
+                hsl_data[i * 4 + 1] = ranges[i].saturation;
+                hsl_data[i * 4 + 2] = ranges[i].luminance;
+                hsl_data[i * 4 + 3] = centers[i];
+            }
+            gl.uniform_4_f32_slice(loc("u_hsl").as_ref(), &hsl_data);
+        } else {
+            // Identity HSL
+            let mut hsl_data = [0.0f32; 32];
+            let centers = [
+                0.0 / 360.0,
+                30.0 / 360.0,
+                60.0 / 360.0,
+                120.0 / 360.0,
+                180.0 / 360.0,
+                240.0 / 360.0,
+                270.0 / 360.0,
+                300.0 / 360.0,
+            ];
+            for i in 0..8 {
+                hsl_data[i * 4 + 3] = centers[i];
+            }
+            gl.uniform_4_f32_slice(loc("u_hsl").as_ref(), &hsl_data);
+        }
+
+        // Split Toning
+        if let Some(st) = &settings.split_toning {
+            gl.uniform_1_f32(loc("u_st_shadow_hue").as_ref(), st.shadow_hue);
+            gl.uniform_1_f32(loc("u_st_shadow_sat").as_ref(), st.shadow_sat);
+            gl.uniform_1_f32(loc("u_st_highlight_hue").as_ref(), st.highlight_hue);
+            gl.uniform_1_f32(loc("u_st_highlight_sat").as_ref(), st.highlight_sat);
+            gl.uniform_1_f32(loc("u_st_balance").as_ref(), st.balance);
+        } else {
+            gl.uniform_1_f32(loc("u_st_shadow_hue").as_ref(), 0.0);
+            gl.uniform_1_f32(loc("u_st_shadow_sat").as_ref(), 0.0);
+            gl.uniform_1_f32(loc("u_st_highlight_hue").as_ref(), 0.0);
+            gl.uniform_1_f32(loc("u_st_highlight_sat").as_ref(), 0.0);
+            gl.uniform_1_f32(loc("u_st_balance").as_ref(), 0.0);
+        }
+
         gl.uniform_2_f32(loc("u_src_size").as_ref(), width as f32, height as f32);
 
         gl.viewport(0, 0, width as i32, height as i32);
