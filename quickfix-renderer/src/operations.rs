@@ -2613,8 +2613,8 @@ mod tests {
     use crate::{ChannelCurve, CropRect, CurvePoint};
     use crate::{
         ClaritySettings, ColorSettings, CropSettings, CurvesSettings, DehazeSettings,
-        DenoiseSettings, ExposureSettings, GeometrySettings, HslSettings,
-        LensDistortionSettings, SharpenSettings, SplitToningSettings, VignetteSettings,
+        DenoiseSettings, ExposureSettings, GeometrySettings, HslSettings, LensDistortionSettings,
+        SharpenSettings, SplitToningSettings, VignetteSettings,
     };
 
     fn create_test_image(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {
