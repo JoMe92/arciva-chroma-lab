@@ -253,7 +253,8 @@ export class QuickFixRenderer {
   backend: string;
   process_frame(data: Uint8Array, width: number, height: number, adjustments: QuickFixAdjustments, options?: ProcessOptions): Promise<FrameResult>;
   render_to_canvas(data: Uint8Array, width: number, height: number, adjustments: QuickFixAdjustments, canvas: HTMLCanvasElement): Promise<void>;
-  set_lut(lut: LutResult): Promise<void>;
+  final_render(data: Uint8Array, width: number, height: number, adjustments: QuickFixAdjustments): Promise<FrameResult>;
+  set_lut(lut: LutResult, id?: string): Promise<void>;
 }
 
 export function get_opaque_crop(rotation_deg: number, width: number, height: number): CropRect;
@@ -374,7 +375,7 @@ export interface QuickFixAdjustments {
     grain?: GrainSettings;
     geometry?: GeometrySettings;
     denoise?: DenoiseSettings;
-    lut?: Lut3DSettings;
+    lut?: Lut3DSettings; // includes externalId
     vignette?: VignetteSettings;
     sharpen?: SharpenSettings;
     clarity?: ClaritySettings;
@@ -434,7 +435,8 @@ pub fn process_frame_sync(
 
 // CPU Renderer wrapper to fit Renderer trait
 struct CpuRenderer {
-    lut: Option<(Vec<f32>, u32)>,
+    luts: std::collections::HashMap<String, (Vec<f32>, u32)>,
+    active_lut: Option<String>,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -443,8 +445,17 @@ impl Renderer for CpuRenderer {
         Ok(())
     }
 
-    async fn set_lut(&mut self, data: &[f32], size: u32) -> Result<(), RendererError> {
-        self.lut = Some((data.to_vec(), size));
+    async fn set_lut(
+        &mut self,
+        id: Option<&str>,
+        data: &[f32],
+        size: u32,
+    ) -> Result<(), RendererError> {
+        let id = id
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "default".to_string());
+        self.luts.insert(id.clone(), (data.to_vec(), size));
+        self.active_lut = Some(id);
         Ok(())
     }
 
@@ -454,12 +465,22 @@ impl Renderer for CpuRenderer {
         width: u32,
         height: u32,
         settings: &QuickFixAdjustments,
+        _source_id: Option<&str>,
     ) -> Result<(Vec<u8>, Vec<u32>), RendererError> {
         // We need to copy data because process_frame_internal takes &mut [u8]
         let mut data_vec = data.to_vec();
 
         // Pass LUT data if available
-        let lut_ref = self.lut.as_ref().map(|(d, s)| (d.as_slice(), *s));
+        // First check settings for ID
+        let lut_id = settings
+            .lut
+            .as_ref()
+            .and_then(|l| l.external_id.as_deref())
+            .or(self.active_lut.as_deref());
+
+        let lut_ref = lut_id
+            .and_then(|id| self.luts.get(id))
+            .map(|(d, s)| (d.as_slice(), *s));
 
         let (res, _, _, histogram) =
             operations::process_frame_internal(&mut data_vec, width, height, settings, lut_ref)
@@ -473,10 +494,56 @@ impl Renderer for CpuRenderer {
         height: u32,
         settings: &QuickFixAdjustments,
         canvas: &web_sys::HtmlCanvasElement,
+        _source_id: Option<&str>,
     ) -> Result<(), RendererError> {
         let mut data_vec = data.to_vec();
-        // Pass LUT data if available
-        let lut_ref = self.lut.as_ref().map(|(d, s)| (d.as_slice(), *s));
+
+        if let Some(lut_settings) = &settings.lut {
+            if let Some(id) = &lut_settings.external_id {
+                let lut_ref = self.luts.get(id).map(|(d, s)| (d.as_slice(), *s));
+
+                let (res, w, h, _) = operations::process_frame_internal(
+                    &mut data_vec,
+                    width,
+                    height,
+                    settings,
+                    lut_ref,
+                )
+                .map_err(RendererError::RenderFailed)?;
+                // Copy canvas stuff...
+                if canvas.width() != w || canvas.height() != h {
+                    canvas.set_width(w);
+                    canvas.set_height(h);
+                }
+
+                let ctx = canvas
+                    .get_context("2d")
+                    .map_err(|_| RendererError::RenderFailed("Failed to get 2d context".into()))?
+                    .ok_or(RendererError::RenderFailed(
+                        "Failed to get 2d context".into(),
+                    ))?
+                    .dyn_into::<web_sys::CanvasRenderingContext2d>()
+                    .map_err(|_| {
+                        RendererError::RenderFailed("Failed to cast to 2d context".into())
+                    })?;
+
+                let clamped = wasm_bindgen::Clamped(&res[..]);
+                let image_data =
+                    web_sys::ImageData::new_with_u8_clamped_array_and_sh(clamped, w, h)
+                        .map_err(|e| RendererError::RenderFailed(format!("{:?}", e)))?;
+
+                ctx.put_image_data(&image_data, 0.0, 0.0)
+                    .map_err(|e| RendererError::RenderFailed(format!("{:?}", e)))?;
+                return Ok(());
+            }
+        }
+
+        // Fallback to active logic if no ID or other cases (legacy)
+        let lut_ref = self
+            .active_lut
+            .as_ref()
+            .and_then(|id| self.luts.get(id))
+            .map(|(d, s)| (d.as_slice(), *s));
 
         let (res, w, h, _) =
             operations::process_frame_internal(&mut data_vec, width, height, settings, lut_ref)
@@ -512,6 +579,7 @@ impl Renderer for CpuRenderer {
 pub struct QuickFixRenderer {
     renderer: Box<dyn Renderer>,
     backend_name: String,
+    lut_cache: Option<(Vec<f32>, u32)>,
 }
 
 #[wasm_bindgen]
@@ -533,6 +601,7 @@ impl QuickFixRenderer {
                 return Ok(QuickFixRenderer {
                     renderer: Box::new(renderer),
                     backend_name: "webgpu".to_string(),
+                    lut_cache: None,
                 });
             } else if force == Some("webgpu") {
                 return Err(JsValue::from_str("WebGPU forced but failed to initialize"));
@@ -547,6 +616,7 @@ impl QuickFixRenderer {
                 return Ok(QuickFixRenderer {
                     renderer: Box::new(renderer),
                     backend_name: "webgl2".to_string(),
+                    lut_cache: None,
                 });
             } else if force == Some("webgl2") {
                 return Err(JsValue::from_str("WebGL2 forced but failed to initialize"));
@@ -554,10 +624,15 @@ impl QuickFixRenderer {
         }
 
         // 3. Fallback to CPU
+        // 3. Fallback to CPU
         if force.is_none() || force == Some("cpu") {
             return Ok(QuickFixRenderer {
-                renderer: Box::new(CpuRenderer { lut: None }),
+                renderer: Box::new(CpuRenderer {
+                    luts: std::collections::HashMap::new(),
+                    active_lut: None,
+                }),
                 backend_name: "cpu".to_string(),
+                lut_cache: None,
             });
         }
 
@@ -582,7 +657,7 @@ impl QuickFixRenderer {
         width: u32,
         height: u32,
         adjustments: JsValue,
-        _options: Option<ProcessOptions>,
+        options: Option<ProcessOptions>,
     ) -> Result<FrameResult, JsValue> {
         let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
 
@@ -596,9 +671,11 @@ impl QuickFixRenderer {
             .into(),
         );
 
+        let source_id = options.as_ref().and_then(|o| o.source_id.as_deref());
+
         let (result_data, histogram) = self
             .renderer
-            .render(data, width, height, &adjustments)
+            .render(data, width, height, &adjustments, source_id)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
@@ -610,14 +687,17 @@ impl QuickFixRenderer {
         })
     }
 
-    pub async fn set_lut(&mut self, lut: JsValue) -> Result<(), JsValue> {
+    pub async fn set_lut(&mut self, lut: JsValue, id: Option<String>) -> Result<(), JsValue> {
         // lut is expected to be { data: Float32Array, size: number }
         // We can deserialize it into LutResult struct
         let lut: LutResult = serde_wasm_bindgen::from_value(lut)?;
         self.renderer
-            .set_lut(&lut.data, lut.size)
+            .set_lut(id.as_deref(), &lut.data, lut.size)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        // Cache for CPU final export
+        self.lut_cache = Some((lut.data, lut.size));
         Ok(())
     }
 
@@ -631,11 +711,70 @@ impl QuickFixRenderer {
         canvas: web_sys::HtmlCanvasElement,
     ) -> Result<(), JsValue> {
         let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
+        // source_id not supported in simple render_to_canvas yet or need options?
+        // For now pass None.
         self.renderer
-            .render_to_canvas(data, width, height, &adjustments, &canvas)
+            .render_to_canvas(data, width, height, &adjustments, &canvas, None)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(())
+    }
+
+    pub async fn final_render(
+        &mut self,
+        data: &[u8],
+        width: u32,
+        height: u32,
+        adjustments: JsValue,
+    ) -> Result<FrameResult, JsValue> {
+        let adjustments: QuickFixAdjustments = serde_wasm_bindgen::from_value(adjustments)?;
+
+        // Debug Log
+        use web_sys::console;
+        console::log_1(&"WASM: Starting final_render (tiled)".into());
+
+        // Extract LUT if available in CPU renderer or passed separately?
+        // Currently final_render doesn't support WebGPU/WebGL backends easily because they are coupled to context.
+        // It makes sense to run final_render on CPU to avoid GPU limits for huge exports, or implementing tiled GPU usage.
+        // Given the requirement "process full-resolution... without crashing", CPU tiling is safest.
+
+        // We'll borrow LUT from the renderer if it's a CpuRenderer, or we might need to properly pass it.
+        // But `self.renderer` is a trait object.
+        // Actually, we can just strictly use the CPU implementation for final export for now.
+        // Or we should update the Renderer trait to support `final_render`.
+        // Simplest: Call operations::final_render_tiled directly here.
+        // But what about LUT?
+        // We can expose LUT getter in Renderer trait or just ignore LUT for now if not critical, OR better:
+        // Assume user passed LUT in `adjustments.lut` but the DATA is separate.
+        // The `QuickFixRenderer` has a `set_lut` method.
+        // But `operations::final_render_tiled` takes `lut_buffer`.
+        // We don't have easy access to the LUT stored inside `Box<dyn Renderer>`.
+        // But wait, `CpuRenderer` has `lut` field.
+        // If we cast `self.renderer` to `CpuRenderer`, we can get it.
+        // But if `self.renderer` is `WebGpuRenderer`, the LUT is in a texture.
+        // So for `final_render`, we might need the user to re-supply the LUT or cache it in `QuickFixRenderer`.
+
+        // Strategy: Add `lut_cache` to `QuickFixRenderer` struct in `lib.rs`!
+        // When `set_lut` is called, store it there too.
+
+        // For now, let's implement the method and use a workaround or fix the struct.
+        // I will just modify the struct fields in a moment.
+
+        // Use cached LUT
+        let lut_ref = self.lut_cache.as_ref().map(|(d, s)| (d.as_slice(), *s));
+
+        let (res, w, h) =
+            operations::final_render_tiled(data, width, height, &adjustments, lut_ref)
+                .map_err(|e| JsValue::from_str(&e))?;
+
+        let histogram = operations::compute_histogram(&res);
+
+        Ok(FrameResult {
+            data: res,
+            width: w,
+            height: h,
+            histogram,
+        })
     }
 }
 
@@ -812,5 +951,92 @@ mod tests {
         assert!((crop.height - 0.5).abs() < 1e-4);
         assert!((crop.x - 0.25).abs() < 1e-4);
         assert!((crop.y - 0.25).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_cpu_renderer_lut_caching() {
+        // Instantiate CpuRenderer directly
+        let mut renderer = CpuRenderer {
+            luts: std::collections::HashMap::new(),
+            active_lut: None,
+        };
+
+        // LUT A: Red tint (R=1.0, G=0.0, B=0.0)
+        let mut lut_a = Vec::with_capacity(8 * 3);
+        for _ in 0..8 {
+            lut_a.extend_from_slice(&[1.0, 0.0, 0.0]);
+        }
+
+        // LUT B: Blue tint (R=0.0, G=0.0, B=1.0)
+        let mut lut_b = Vec::with_capacity(8 * 3);
+        for _ in 0..8 {
+            lut_b.extend_from_slice(&[0.0, 0.0, 1.0]);
+        }
+
+        // 1. Upload LUTs using block_on since we don't have tokio runtime
+        futures::executor::block_on(async {
+            renderer.set_lut(Some("lut_a"), &lut_a, 2).await.unwrap();
+            renderer.set_lut(Some("lut_b"), &lut_b, 2).await.unwrap();
+        });
+
+        assert_eq!(renderer.luts.len(), 2);
+        assert_eq!(renderer.active_lut, Some("lut_b".to_string()));
+
+        // 2. Prepare test image (Medium Gray)
+        let input_data = vec![128, 128, 128, 255];
+        let width = 1;
+
+        // 3. Render with LUT A (Red) using id
+        let settings_a = QuickFixAdjustments {
+            lut: Some(Lut3DSettings {
+                intensity: 1.0,
+                tint: None,
+                external_id: Some("lut_a".to_string()),
+            }),
+            ..Default::default()
+        };
+
+        let (res_a, _) =
+            futures::executor::block_on(renderer.render(&input_data, width, 1, &settings_a, None))
+                .unwrap();
+
+        assert!(res_a[0] > 200); // Red
+        assert!(res_a[1] < 50); // Green
+        assert!(res_a[2] < 50); // Blue
+
+        // 4. Render with LUT B (Blue) using id
+        let settings_b = QuickFixAdjustments {
+            lut: Some(Lut3DSettings {
+                intensity: 1.0,
+                tint: None,
+                external_id: Some("lut_b".to_string()),
+            }),
+            ..Default::default()
+        };
+
+        let (res_b, _) =
+            futures::executor::block_on(renderer.render(&input_data, width, 1, &settings_b, None))
+                .unwrap();
+
+        assert!(res_b[0] < 50); // Red
+        assert!(res_b[2] > 200); // Blue
+
+        // 5. Render with Missing ID
+        let settings_c = QuickFixAdjustments {
+            lut: Some(Lut3DSettings {
+                intensity: 1.0,
+                tint: None,
+                external_id: Some("missing".to_string()),
+            }),
+            ..Default::default()
+        };
+
+        let (res_c, _) =
+            futures::executor::block_on(renderer.render(&input_data, width, 1, &settings_c, None))
+                .unwrap();
+        // Should be original gray
+        assert!((res_c[0] as i32 - 128).abs() < 5);
+        assert!((res_c[1] as i32 - 128).abs() < 5);
+        assert!((res_c[2] as i32 - 128).abs() < 5);
     }
 }

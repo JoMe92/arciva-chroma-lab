@@ -18,7 +18,13 @@ vi.mock('../../../quickfix-renderer/pkg/client.js', () => {
             constructor() { }
             async init() { }
             async setImage() { }
-            async render() {
+            async render(
+                _imageData: ImageBitmap | ArrayBuffer | null,
+                _width: number,
+                _height: number,
+                _adjustments: any,
+                _sourceId?: string
+            ) {
                 return {
                     imageBitmap: new ArrayBuffer(0),
                     width: 100,
@@ -74,7 +80,6 @@ describe('App Integration', () => {
         }) as unknown as (contextId: string) => CanvasRenderingContext2D | null);
 
         // Mock Image
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (globalThis as any).Image = class {
             width = 100;
             height = 100;
@@ -88,7 +93,6 @@ describe('App Integration', () => {
         };
 
         // Mock ImageData
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (globalThis as any).ImageData = class {
             data: Uint8ClampedArray;
             width: number;
@@ -101,7 +105,6 @@ describe('App Integration', () => {
         };
 
         // Mock createImageBitmap
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (globalThis as any).createImageBitmap = async () => {
             return {
                 close: () => { },
@@ -113,6 +116,34 @@ describe('App Integration', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it('passes sourceId to client render', async () => {
+        // We need to spy on the QuickFixClient.prototype.render method
+        // But we mocked the module return.
+        // Let's rely on importing it and spying.
+
+        // Wait, vi.mock happens before imports.
+        // So import { QuickFixClient } from ... will get the Mocked Class.
+        const { QuickFixClient } = await import('../../../quickfix-renderer/pkg/client.js');
+        const spy = vi.spyOn(QuickFixClient.prototype, 'render');
+
+        render(<App />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/Image Size: 100x100/i)).toBeInTheDocument();
+        });
+
+        // The render should have been called
+        await waitFor(() => {
+            expect(spy).toHaveBeenCalled();
+            // Check arguments. 
+            // args: imageData, width, height, settings, sourceId
+            const lastCall = spy.mock.lastCall as unknown as any[];
+            const sourceId = lastCall[4];
+            expect(typeof sourceId).toBe('string');
+            expect(sourceId!.length).toBeGreaterThan(0);
+        });
     });
 
     it('renders and allows picking white balance', async () => {

@@ -50,6 +50,7 @@ impl RendererOptions {
 pub struct Lut3DSettings {
     pub intensity: f32, // 0.0 to 1.0 (opacity)
     pub tint: Option<f32>,
+    pub external_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -64,14 +65,18 @@ pub struct GrainSettings {
 pub struct ProcessOptions {
     #[wasm_bindgen(skip)]
     pub return_image_bitmap: Option<bool>,
+
+    #[wasm_bindgen(skip)]
+    pub source_id: Option<String>,
 }
 
 #[wasm_bindgen]
 impl ProcessOptions {
     #[wasm_bindgen(constructor)]
-    pub fn new(return_image_bitmap: Option<bool>) -> ProcessOptions {
+    pub fn new(return_image_bitmap: Option<bool>, source_id: Option<String>) -> ProcessOptions {
         ProcessOptions {
             return_image_bitmap,
+            source_id,
         }
     }
 
@@ -83,5 +88,15 @@ impl ProcessOptions {
     #[wasm_bindgen(setter = returnImageBitmap)]
     pub fn set_return_image_bitmap(&mut self, val: Option<bool>) {
         self.return_image_bitmap = val;
+    }
+
+    #[wasm_bindgen(getter = sourceId)]
+    pub fn source_id(&self) -> Option<String> {
+        self.source_id.clone()
+    }
+
+    #[wasm_bindgen(setter = sourceId)]
+    pub fn set_source_id(&mut self, val: Option<String>) {
+        self.source_id = val;
     }
 }

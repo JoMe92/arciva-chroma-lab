@@ -57,6 +57,9 @@ pub struct WebGpuRenderer {
     lut_sampler: Option<wgpu::Sampler>,
     default_lut_texture: Option<wgpu::Texture>,
     curves_sampler: Option<wgpu::Sampler>,
+
+    // Cache
+    source_textures: std::collections::HashMap<String, wgpu::Texture>,
 }
 
 impl Default for WebGpuRenderer {
@@ -80,6 +83,7 @@ impl WebGpuRenderer {
             lut_sampler: None,
             default_lut_texture: None,
             curves_sampler: None,
+            source_textures: std::collections::HashMap::new(),
         }
     }
 
@@ -346,7 +350,12 @@ impl Renderer for WebGpuRenderer {
         self.ensure_initialized().await
     }
 
-    async fn set_lut(&mut self, data: &[f32], size: u32) -> Result<(), RendererError> {
+    async fn set_lut(
+        &mut self,
+        _id: Option<&str>,
+        data: &[f32],
+        size: u32,
+    ) -> Result<(), RendererError> {
         self.ensure_initialized().await?;
         let device = self.device.as_ref().unwrap();
         let queue = self.queue.as_ref().unwrap();
@@ -394,6 +403,7 @@ impl Renderer for WebGpuRenderer {
         width: u32,
         height: u32,
         settings: &QuickFixAdjustments,
+        _source_id: Option<&str>,
     ) -> Result<(Vec<u8>, Vec<u32>), RendererError> {
         self.ensure_initialized().await?;
         let device = self.device.as_ref().unwrap();
@@ -401,26 +411,59 @@ impl Renderer for WebGpuRenderer {
         let pipeline = self.pipeline.as_ref().unwrap();
         let bind_group_layout = self.bind_group_layout.as_ref().unwrap();
 
-        // Upload Source Texture
-        let src_texture = device.create_texture_with_data(
-            queue,
-            &wgpu::TextureDescriptor {
-                label: Some("Source Texture"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
+        // Upload Source Texture or Reuse Cached
+        // We need an owned Option to hold the transient texture if created
+        let transient_texture;
+
+        // Decide which texture to use
+        let src_texture = if let Some(id) = _source_id {
+            if !self.source_textures.contains_key(id) {
+                let tex = device.create_texture_with_data(
+                    queue,
+                    &wgpu::TextureDescriptor {
+                        label: Some(&format!("Source Texture {}", id)),
+                        size: wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    },
+                    wgpu::util::TextureDataOrder::LayerMajor,
+                    data,
+                );
+                self.source_textures.insert(id.to_string(), tex);
+            }
+            // Now retrieve reference
+            self.source_textures.get(id).unwrap()
+        } else {
+            // Create transient
+            transient_texture = device.create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: Some("Source Texture"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
                 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            },
-            wgpu::util::TextureDataOrder::LayerMajor,
-            data,
-        );
+                wgpu::util::TextureDataOrder::LayerMajor,
+                data,
+            );
+            &transient_texture
+        };
 
         let src_view = src_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let src_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -857,6 +900,7 @@ impl Renderer for WebGpuRenderer {
         height: u32,
         settings: &QuickFixAdjustments,
         canvas: &web_sys::HtmlCanvasElement,
+        _source_id: Option<&str>,
     ) -> Result<(), RendererError> {
         self.ensure_initialized().await?;
 

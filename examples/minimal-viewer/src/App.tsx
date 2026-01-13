@@ -78,6 +78,7 @@ function App() {
   const [currentBackend, setCurrentBackend] = useState<string>('initializing...');
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [imageData, setImageData] = useState<Uint8Array | null>(null);
+  const [sourceId, setSourceId] = useState<string | undefined>(undefined);
   const [isRendering, setIsRendering] = useState(false);
   const [histogramData, setHistogramData] = useState<number[]>([]);
 
@@ -284,7 +285,6 @@ function App() {
 
         // Let's assume for now I pass a plain object and cast it.
         // The worker will read `.backend` from it.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const options = { backend } as any as RendererOptions;
 
         await clientRef.current!.init(options);
@@ -320,6 +320,7 @@ function App() {
         const data = ctx.getImageData(0, 0, img.width, img.height).data;
         const buffer = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
         setImageData(buffer);
+        setSourceId(self.crypto.randomUUID());
 
         if (canvasRef.current) {
           canvasRef.current.width = img.width;
@@ -346,7 +347,6 @@ function App() {
 
     const render = async () => {
       setIsRendering(true);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const settings: any = { // Use any for now as TS types might not be updated in editor yet
         exposure: { exposure, contrast, highlights, shadows },
         color: { temperature: temp, tint },
@@ -407,7 +407,8 @@ function App() {
           null,
           image.width,
           image.height,
-          settings
+          settings,
+          sourceId
         );
 
         const { imageBitmap, width, height, histogram } = res;
