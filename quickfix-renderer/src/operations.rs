@@ -1,7 +1,7 @@
 use crate::{
     ClaritySettings, ColorSettings, CropSettings, CurvesSettings, DehazeSettings, DenoiseSettings,
-    ExposureSettings, GeometrySettings, GrainSettings, HslSettings, QuickFixAdjustments,
-    SharpenSettings, SplitToningSettings, VignetteSettings, LensDistortionSettings,
+    ExposureSettings, GeometrySettings, GrainSettings, HslSettings, LensDistortionSettings,
+    QuickFixAdjustments, SharpenSettings, SplitToningSettings, VignetteSettings,
 };
 use image::{ImageBuffer, Rgba, RgbaImage};
 use rand::SeedableRng;
@@ -20,9 +20,8 @@ fn clamp_u8(v: f32) -> u8 {
 
 use crate::api_types::Lut3DSettings;
 // New imports for potential test module or general use
-use super::*;
-use crate::{CropRect, ChannelCurve, CurvePoint};
-
+// use super::*;
+// use crate::{ChannelCurve, CropRect, CurvePoint};
 
 pub fn compute_histogram(data: &[u8]) -> Vec<u32> {
     let mut histogram = vec![0u32; 256 * 3]; // R, G, B concatenated
@@ -387,7 +386,6 @@ fn apply_crop_rotate(img: &RgbaImage, settings: &CropSettings) -> RgbaImage {
     result
 }
 
-
 fn apply_lens_distortion(img: &RgbaImage, settings: &LensDistortionSettings) -> RgbaImage {
     if settings.k1.abs() < 1e-5 && settings.k2.abs() < 1e-5 {
         return img.clone();
@@ -419,7 +417,7 @@ fn apply_lens_distortion(img: &RgbaImage, settings: &LensDistortionSettings) -> 
             let src_v = center_y + rel_y * scaling;
 
             // Check bounds
-            if src_u < 0.0 || src_u > 1.0 || src_v < 0.0 || src_v > 1.0 {
+            if !(0.0..=1.0).contains(&src_u) || !(0.0..=1.0).contains(&src_v) {
                 // Black
                 new_img.put_pixel(x, y, Rgba([0, 0, 0, 255])); // Alpha 255 for opaque black? Or 0? Let's use 0 for transparent border.
                 continue;
@@ -427,7 +425,7 @@ fn apply_lens_distortion(img: &RgbaImage, settings: &LensDistortionSettings) -> 
 
             let src_x = src_u * w_f32;
             let src_y = src_v * h_f32;
-            
+
             new_img.put_pixel(x, y, sample_bicubic(img, src_x, src_y));
         }
     }
@@ -1478,12 +1476,12 @@ fn fast_box_blur(img: &RgbaImage, radius: u32) -> RgbaImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ChannelCurve, CropRect, CurvePoint};
     use crate::{
         ClaritySettings, ColorSettings, CropSettings, DehazeSettings, ExposureSettings,
-        GeometrySettings, GrainSettings, HslSettings, LensDistortionSettings,
-        QuickFixAdjustments, SharpenSettings, SplitToningSettings, VignetteSettings,
+        GeometrySettings, GrainSettings, HslSettings, LensDistortionSettings, QuickFixAdjustments,
+        SharpenSettings, SplitToningSettings, VignetteSettings,
     };
-    use crate::{ChannelCurve, CropRect, CurvePoint};
 
     fn create_test_image(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {
         let mut img = RgbaImage::new(width, height);
@@ -1903,7 +1901,7 @@ mod tests {
         let width = 100;
         let height = 100;
         let mut img = create_test_image(width, height, [255, 255, 255, 255]);
-        
+
         // Draw a straight line at x=50 (width 3: 49, 50, 51)
         for y in 0..height {
             img.put_pixel(49, y, Rgba([0, 0, 0, 255]));
@@ -1911,13 +1909,10 @@ mod tests {
             img.put_pixel(51, y, Rgba([0, 0, 0, 255]));
         }
 
-        let settings = LensDistortionSettings {
-            k1: 0.5, 
-            k2: 0.0,
-        };
+        let settings = LensDistortionSettings { k1: 0.5, k2: 0.0 };
 
         let res = apply_lens_distortion(&img, &settings);
-        
+
         // Center should stay at 50 (cx=0.5 -> x=50).
         let center_px = res.get_pixel(50, 50);
         assert_eq!(center_px[0], 0); // Should be black
@@ -1928,9 +1923,9 @@ mod tests {
         for y in 0..height {
             img_vert.put_pixel(25, y, Rgba([0, 0, 0, 255]));
         }
-        
+
         let res_vert = apply_lens_distortion(&img_vert, &settings);
-        
+
         // At center y=50, the line shifts inwards?
         // u=0.25 maps to src_u=0.242.
         // So Res(25) looks at Src(24). Src(24) is white.

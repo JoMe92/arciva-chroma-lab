@@ -549,7 +549,7 @@ impl Renderer for WebGpuRenderer {
                 .unwrap_or(0.0),
             denoise_color: settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
             curves_intensity: settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
-            _padding: 0.0,
+            // _padding: 0.0, // Removed duplicate
             st_shadow_hue: settings
                 .split_toning
                 .as_ref()
@@ -1067,7 +1067,7 @@ impl Renderer for WebGpuRenderer {
                 .unwrap_or(0.0),
             denoise_color: settings.denoise.as_ref().map(|d| d.color).unwrap_or(0.0),
             curves_intensity: settings.curves.as_ref().map(|c| c.intensity).unwrap_or(1.0),
-            _padding: 0.0,
+            // _padding: 0.0, // Removed duplicate
             st_shadow_hue: settings
                 .split_toning
                 .as_ref()
@@ -1093,8 +1093,10 @@ impl Renderer for WebGpuRenderer {
                 .as_ref()
                 .map(|s| s.balance)
                 .unwrap_or(0.0),
-            _padding2: 0.0,
-            _padding3: 0.0,
+            _padding: 0.0,
+            distortion_k1: settings.distortion.as_ref().map(|d| d.k1).unwrap_or(0.0),
+            distortion_k2: settings.distortion.as_ref().map(|d| d.k2).unwrap_or(0.0),
+            _padding_align: 0.0,
             hsl: {
                 let mut hsl_data = [[0.0f32; 4]; 8];
                 let centers = [

@@ -228,7 +228,7 @@ pub struct DehazeSettings {
 pub struct LensDistortionSettings {
     pub k1: f32, // Main radial distortion
     pub k2: f32, // Secondary radial distortion
-    // We could add centers or scale, but let's stick to k1/k2 for now
+                 // We could add centers or scale, but let's stick to k1/k2 for now
 }
 
 #[wasm_bindgen(typescript_custom_section)]
