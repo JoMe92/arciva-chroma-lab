@@ -1,7 +1,7 @@
 # Rust/WASM Quick Fix Renderer
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![CI](https://github.com/JoMe92/chroma-lab/actions/workflows/quality-checks.yml/badge.svg)](https://github.com/JoMe92/chroma-lab/actions/workflows/quality-checks.yml)
+[![CI](https://github.com/JoMe92/arciva-chroma-lab/actions/workflows/quality-checks.yml/badge.svg)](https://github.com/JoMe92/arciva-chroma-lab/actions/workflows/quality-checks.yml)
 
 A standalone Rust/WASM renderer for image adjustments (Geometry, Crop, Rotate, Exposure, Color, Grain).
 
@@ -14,8 +14,8 @@ A standalone Rust/WASM renderer for image adjustments (Geometry, Crop, Rotate, E
 1. **Clone the repository:**
 
     ```bash
-    git clone https://github.com/JoMe92/chroma-lab.git
-    cd chroma-lab
+    git clone https://github.com/JoMe92/arciva-chroma-lab.git
+    cd arciva-chroma-lab
     ```
 
 2. **Install dependencies:**
